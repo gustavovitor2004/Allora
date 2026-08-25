@@ -13,9 +13,11 @@ import os
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
-# This file lives in <project_root>/src/settings.py, so the project root -
-# where config.json belongs - is one directory up from here.
-APP_DIR = Path(__file__).resolve().parent.parent
+from utils import project_root
+
+# project_root() resolves to the project folder normally, or to the
+# .exe's own directory when running as a PyInstaller-frozen build.
+APP_DIR = Path(project_root())
 CONFIG_PATH = APP_DIR / "config.json"
 
 DEFAULT_OUTPUT_DIR = str(Path.home() / "Videos" / "Downloads")

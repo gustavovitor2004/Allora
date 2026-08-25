@@ -15,13 +15,17 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 from urllib.parse import urlparse
 
 
 def project_root() -> str:
-    """The directory containing this src/ folder - i.e. the project root,
-    where MasterApp.bat creates config.json, tools/ffmpeg, tools/poppler,
-    etc. on first run."""
+    """The directory where config.json, tools/ffmpeg, tools/poppler, etc.
+    live. Normally the directory containing this src/ folder - but inside a
+    PyInstaller-frozen .exe, __file__ resolves into the bundle's temporary
+    extraction dir instead, so we anchor to the .exe's own directory there."""
+    if getattr(sys, "frozen", False):
+        return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------------------
@@ -246,8 +250,8 @@ def safe_filename(name: str) -> str:
 
 
 def unique_path(directory: str, base_name: str, ext: str) -> str:
-    """Build a path for `<directory>/<base_name>.<ext>`, appending " (1)",
-    " (2)", etc. until it doesn't collide with an existing file. Shared by
+    """Build a path for `<directory>/<base_name>.<ext>`, appending \" (1)\",
+    \" (2)\", etc. until it doesn't collide with an existing file. Shared by
     every module that writes converted/exported output (the top-level
     converter.py, documentos/converter.py)."""
     candidate = os.path.join(directory, f"{base_name}.{ext}")
