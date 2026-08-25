@@ -9,11 +9,26 @@ conversão de documentos.
 ## Requisitos
 
 - Windows 10/11
+- **Nenhum outro requisito** se você usar o `.exe` standalone (veja
+  "Versão .exe" abaixo) — o Python já vem embutido nele.
 - Python 3.10 ou superior, com **"Add python.exe to PATH"** marcado na
-  instalação — é o único requisito que você precisa resolver manualmente,
-  tudo o mais é instalado automaticamente (veja abaixo)
+  instalação, **apenas** se for usar a versão via `MasterApp.bat` (código-
+  fonte) em vez do `.exe`.
 
-## Instalação e uso
+## Versão .exe (recomendado — não precisa instalar Python)
+
+Baixe `MasterApp-exe-standalone.zip` da [página de
+Releases](https://github.com/gustavovitor2004/MasterApp/releases), extraia
+em qualquer pasta e dê duplo clique em `MasterApp.exe` dentro dela. Pronto —
+não precisa instalar Python, nem rodar nenhum instalador. ffmpeg e Poppler já
+vêm dentro da pasta `tools\`, junto com o `.exe`.
+
+Esse pacote é gerado com [PyInstaller](https://pyinstaller.org/), que embute
+o interpretador Python e todas as bibliotecas dentro do próprio `.exe`. Pra
+gerar um novo pacote depois de alterar o código, rode `build_exe.ps1` (veja
+"Gerando um pacote de release" abaixo).
+
+## Instalação e uso (a partir do código-fonte, com `MasterApp.bat`)
 
 1. Dê **duplo clique em `MasterApp.bat`**, na raiz do projeto.
    - **Primeira vez**: o script detecta que ainda falta instalar tudo,
@@ -31,10 +46,18 @@ Se a instalação falhar em algum passo (ex: sem internet), o marcador **não**
 é criado, então da próxima vez que você abrir `MasterApp.bat` ele tenta
 instalar tudo de novo do zero, em vez de abrir o programa quebrado.
 
-Envie a pasta inteira (`src/`, `MasterApp.bat`, `tools_installer.ps1`,
-`requirements.txt`, `README.md`) compactada em `.zip` para outra pessoa —
-ela só precisa ter o Python instalado; nenhuma outra ferramenta (nem Git)
-é necessária de antemão.
+**Recomendado:** publique um `.zip` já com `tools/ffmpeg` e `tools/poppler`
+dentro (veja "Gerando um pacote de release" abaixo) e distribua esse arquivo
+em vez do "Download ZIP" do código-fonte do GitHub. Assim ninguém depende de
+baixar ffmpeg/Poppler pela internet no primeiro uso — em redes corporativas
+ou com antivírus restritivo, esse download costuma falhar silenciosamente e
+o app abre sem ffmpeg (mensagem "ffmpeg não encontrado" ao converter vídeo).
+
+Se preferir do jeito simples mesmo assim, envie a pasta inteira (`src/`,
+`MasterApp.bat`, `tools_installer.ps1`, `requirements.txt`, `README.md`)
+compactada em `.zip` para outra pessoa — ela só precisa ter o Python
+instalado; nenhuma outra ferramenta (nem Git) é necessária de antemão, mas
+o ffmpeg/Poppler serão baixados na primeira execução em cada máquina.
 
 ### O que é instalado automaticamente
 
@@ -49,6 +72,42 @@ ela só precisa ter o Python instalado; nenhuma outra ferramenta (nem Git)
 Nenhuma dessas ferramentas é registrada no `PATH` do Windows nem instalada
 para o sistema inteiro — o MasterApp já sabe procurar dentro de `tools\`
 automaticamente, então isso funciona sem pedir administrador.
+
+### Gerando um pacote de release (com ffmpeg/Poppler já dentro)
+
+Para não depender do download automático em cada máquina, monte um `.zip`
+com `tools/ffmpeg` e `tools/poppler` já preenchidos (baixados uma vez aqui,
+via `MasterApp.bat` normalmente) e publique como **GitHub Release** — não
+como commit no repositório, porque o `ffmpeg.exe` sozinho tem ~140MB e o
+Git recusa arquivos acima de 100MB sem Git LFS. O pacote deve conter:
+
+- `src/`, `MasterApp.bat`, `Desinstalar_MasterApp.bat`, `tools_installer.ps1`,
+  `requirements.txt`, `README.md`
+- `tools/ffmpeg/ffmpeg.exe` e `tools/ffmpeg/ffprobe.exe` (**sem**
+  `ffplay.exe` — o app não usa e ele sozinho tem ~140MB)
+- `tools/poppler/` completo (executáveis + DLLs)
+
+O `MasterApp.bat` já checa se `tools\ffmpeg\ffmpeg.exe` e
+`tools\poppler\pdftoppm.exe` existem antes de tentar baixar — se já
+estiverem no pacote, ele pula direto para instalar os pacotes Python e
+abrir o app, sem precisar de internet para ffmpeg/Poppler.
+
+#### Pacote `.exe` standalone (sem Python)
+
+1. Rode `pip install -r requirements.txt` uma vez (para ter tudo disponível
+   localmente) e `.\MasterApp.bat` uma vez, se `tools\ffmpeg` e
+   `tools\poppler` ainda não existirem, só para baixá-los.
+2. Rode `.\build_exe.ps1` — gera `dist\MasterApp\MasterApp.exe` (PyInstaller,
+   embute o interpretador Python e todas as bibliotecas).
+3. Copie `tools\ffmpeg` e `tools\poppler` para dentro de
+   `dist\MasterApp\tools\` (o `.exe` procura ali do mesmo jeito que o
+   `MasterApp.bat` procura na raiz do projeto).
+4. Compacte a pasta `dist\MasterApp\` inteira em `.zip` e publique como
+   asset da release — esse é o `MasterApp-exe-standalone.zip`.
+
+O `.exe` fica grande (~300MB compactado, ~700MB extraído) porque leva o
+Python e todas as bibliotecas (PySide6, OpenCV etc.) embutidos — é a troca
+por não precisar de nenhuma instalação na máquina de quem for usar.
 
 ### Instalando manualmente (alternativa)
 
@@ -270,6 +329,7 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 │       │                     # pdf2image, pdf2docx, pdfplumber, docx2pdf, pypdf)
 │       ├── workers.py        # QThread workers de digitalização e conversão
 │       └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
+├── build_exe.ps1              # Gera o .exe standalone via PyInstaller (dist/MasterApp/)
 ├── MasterApp.bat             # Único arquivo que o usuário abre - instala na 1ª vez, inicia sempre
 ├── Desinstalar_MasterApp.bat # Remove pacotes Python, tools/ffmpeg, tools/poppler e o marcador
 ├── tools_installer.ps1       # Baixa ffmpeg/Poppler portáteis, chamado pelo MasterApp.bat
