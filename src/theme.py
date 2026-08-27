@@ -217,6 +217,21 @@ THEMES = {
         "radius_card": 0, "radius_button": 0, "radius_pill": 2, "border_width": 1,
         "tab_style": "underline", "uppercase_tracking": 1,
     },
+    "conductor": {
+        "label": "Mesa do Maestro",
+        "bg_primary": "#0c0c0c", "bg_secondary": "#111111", "bg_surface": "#141414",
+        "bg_surface2": "#1e1e1e", "bg_hover": "#1e1e1e", "bg_active": "#242424",
+        "accent": "#c9a84c", "accent_hover": "#b8944a", "accent_soft": "rgba(201, 168, 76, 0.14)",
+        "accent_ink": "#0c0c0c",
+        "success": "#5d8a5d", "success_soft": "rgba(93, 138, 93, 0.16)",
+        "error": "#b85c4a", "error_soft": "rgba(184, 92, 74, 0.16)",
+        "text_primary": "#e8e4df", "text_secondary": "#948f88", "text_tertiary": "#6b6b6b",
+        "text_disabled": "#3a3a3a",
+        "border": "rgba(255, 255, 255, 0.06)", "border_strong": "rgba(255, 255, 255, 0.12)",
+        "font_body": "Segoe UI", "font_display": "Cambria",
+        "radius_card": 10, "radius_button": 8, "radius_pill": 100, "border_width": 1,
+        "tab_style": "underline", "uppercase_tracking": 2,
+    },
 }
 
 DEFAULT_THEME = "classic_dark"
