@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QTabWidget, QMenu,
+    QMessageBox, QFrame, QStackedWidget, QMenu,
 )
 
 from downloader import DownloadItem, DownloadManager
@@ -102,6 +102,72 @@ def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
     btn.setToolTip({"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover"}.get(name, ""))
+
+
+class NavItem(QFrame):
+    """One row in the sidebar (Downloads / Converter Arquivos / Documentos).
+    A plain QFrame rather than a QPushButton because it needs three
+    independent children (icon, label, optional count badge) laid out in a
+    row - Qt buttons can't host a child layout. Selection state lives in
+    the "active" dynamic property (same repolish() dance as everything
+    else theme.py drives), and MainWindow is responsible for making sure
+    only one NavItem is active at a time."""
+
+    def __init__(self, icon_name: str, label: str, on_click, theme_name: str = "classic_dark", parent=None):
+        super().__init__(parent)
+        self.icon_name = icon_name
+        self.theme_name = theme_name
+        self._on_click = on_click
+        self.setObjectName("NavItem")
+        self.setProperty("active", False)
+        self.setCursor(Qt.PointingHandCursor)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 9, 10, 9)
+        layout.setSpacing(10)
+
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(18, 18)
+        layout.addWidget(self.icon_label)
+
+        self.text_label = QLabel(label)
+        self.text_label.setObjectName("NavItemText")
+        layout.addWidget(self.text_label, stretch=1)
+
+        self.badge = make_pill("")
+        self.badge.setVisible(False)
+        layout.addWidget(self.badge)
+
+        self._refresh_icon()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._on_click()
+        super().mousePressEvent(event)
+
+    def set_active(self, active: bool):
+        self.setProperty("active", active)
+        repolish(self)
+        self.text_label.setProperty("active", active)
+        repolish(self.text_label)
+        self._refresh_icon()
+
+    def set_count(self, count: int):
+        if count > 0:
+            set_pill(self.badge, str(count), "neutral")
+            self.badge.setVisible(True)
+        else:
+            self.badge.setVisible(False)
+
+    def set_theme(self, theme_name: str):
+        self.theme_name = theme_name
+        self._refresh_icon()
+
+    def _refresh_icon(self):
+        colors = theme_colors(self.theme_name)
+        active = bool(self.property("active"))
+        color = colors["accent"] if active else colors["text_secondary"]
+        self.icon_label.setPixmap(make_icon(self.icon_name, color, size=17).pixmap(17, 17))
 
 
 class QueueItemWidget(QFrame):
@@ -622,12 +688,48 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._build_header())
 
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_downloads_tab(), "Downloads")
-        self.tabs.addTab(self._build_converter_tab(), "Converter Arquivos")
-        self.tabs.addTab(DocumentosTab(self.settings), "Documentos")
-        self._tab_icon_names = ["download", "convert", "document"]
-        root.addWidget(self.tabs, stretch=1)
+        body = QWidget()
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(0)
+
+        body_layout.addWidget(self._build_sidebar())
+
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_downloads_tab())
+        self.stack.addWidget(self._build_converter_tab())
+        self.stack.addWidget(DocumentosTab(self.settings))
+        body_layout.addWidget(self.stack, stretch=1)
+
+        root.addWidget(body, stretch=1)
+        self._select_nav(0)
+
+    def _build_sidebar(self) -> QFrame:
+        sidebar = QFrame()
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(220)
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(10, 16, 10, 16)
+        layout.setSpacing(3)
+
+        self.nav_items: list[NavItem] = []
+
+        downloads_item = NavItem("download", "Downloads", lambda: self._select_nav(0), self.settings.theme)
+        converter_item = NavItem("convert", "Converter Arquivos", lambda: self._select_nav(1), self.settings.theme)
+        documentos_item = NavItem("document", "Documentos", lambda: self._select_nav(2), self.settings.theme)
+        for item in (downloads_item, converter_item, documentos_item):
+            layout.addWidget(item)
+            self.nav_items.append(item)
+        self.nav_downloads_item = downloads_item
+        self.nav_converter_item = converter_item
+
+        layout.addStretch(1)
+        return sidebar
+
+    def _select_nav(self, index: int):
+        self.stack.setCurrentIndex(index)
+        for i, item in enumerate(self.nav_items):
+            item.set_active(i == index)
 
     def _build_header(self) -> QFrame:
         header = QFrame()
@@ -652,7 +754,7 @@ class MainWindow(QMainWindow):
         self._icon_buttons.append((self.theme_btn, "palette", "text_secondary"))
         layout.addWidget(self.theme_btn)
 
-        self.settings_btn = QPushButton(" Config")
+        self.settings_btn = QPushButton(" Configurações")
         self.settings_btn.setObjectName("Secondary")
         self.settings_btn.setIconSize(QSize(15, 15))
         self.settings_btn.clicked.connect(self.open_settings)
@@ -888,6 +990,7 @@ class MainWindow(QMainWindow):
 
         self._widgets[item_id] = widget
         self._list_items[item_id] = list_item
+        self.nav_downloads_item.set_count(len(self._widgets))
 
     def _on_item_updated(self, item_id: int):
         item = self.manager.get_item(item_id)
@@ -903,6 +1006,7 @@ class MainWindow(QMainWindow):
             row = self.queue_list.row(list_item)
             if row >= 0:
                 self.queue_list.takeItem(row)
+        self.nav_downloads_item.set_count(len(self._widgets))
 
     def _on_queue_idle(self):
         self.status_bar_label.setText("Fila concluída.")
@@ -956,6 +1060,7 @@ class MainWindow(QMainWindow):
 
         self._conv_widgets[item_id] = widget
         self._conv_list_items[item_id] = list_item
+        self.nav_converter_item.set_count(len(self._conv_widgets))
 
     def _on_conv_item_updated(self, item_id: int):
         item = self.conversion_manager.get_item(item_id)
@@ -971,6 +1076,7 @@ class MainWindow(QMainWindow):
             row = self.conv_queue_list.row(list_item)
             if row >= 0:
                 self.conv_queue_list.takeItem(row)
+        self.nav_converter_item.set_count(len(self._conv_widgets))
 
     def _on_conv_queue_idle(self):
         self.conv_status_label.setText("Conversões concluídas.")
@@ -1106,8 +1212,8 @@ class MainWindow(QMainWindow):
         logo_icon = make_badge("download", colors["accent"], colors["accent_ink"], diameter=34, icon_size=17)
         self.logo_label.setPixmap(logo_icon.pixmap(34, 34))
 
-        for index, name in enumerate(self._tab_icon_names):
-            self.tabs.setTabIcon(index, make_icon(name, colors["text_secondary"], size=17))
+        for item in self.nav_items:
+            item.set_theme(theme_name)
 
         for button, icon_name, color_key in self._icon_buttons:
             button.setIcon(make_icon(icon_name, colors[color_key], size=15))

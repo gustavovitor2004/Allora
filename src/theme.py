@@ -362,6 +362,30 @@ def build_stylesheet(theme_name: str) -> str:
         color: {c['text_secondary']};
     }}
 
+    /* --- Sidebar navigation ---------------------------------------------- */
+    QFrame#Sidebar {{
+        background-color: {c['bg_secondary']};
+        border-right: {bw}px solid {c['border']};
+    }}
+    QFrame#NavItem {{
+        background-color: transparent;
+        border-radius: {r_btn}px;
+    }}
+    QFrame#NavItem:hover {{
+        background-color: {c['bg_hover']};
+    }}
+    QFrame#NavItem[active="true"] {{
+        background-color: {c['accent_soft']};
+    }}
+    QLabel#NavItemText {{
+        font-size: 10pt;
+        font-weight: 600;
+        color: {c['text_secondary']};
+    }}
+    QLabel#NavItemText[active="true"] {{
+        color: {c['text_primary']};
+    }}
+
     /* --- Cards / queue rows -------------------------------------------- */
     QFrame#Card {{
         background-color: {c['bg_surface']};
