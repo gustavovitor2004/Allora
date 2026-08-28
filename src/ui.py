@@ -1202,6 +1202,45 @@ class MainWindow(QMainWindow):
     def apply_theme(self, theme_name: str):
         set_app_theme(QApplication.instance(), theme_name)
         self._refresh_icon_theme(theme_name)
+        self._apply_title_bar_color(theme_name)
+
+    def _apply_title_bar_color(self, theme_name: str) -> None:
+        """Recolors the native Windows title bar (the strip with the
+        minimize/maximize/close buttons, drawn by the OS - not by Qt) so
+        it blends into the theme instead of standing out as a plain white
+        bar. Uses the DWM API's undocumented-but-stable
+        DWMWA_CAPTION_COLOR/DWMWA_TEXT_COLOR attributes, only available on
+        Windows 11 (build 22000+); on Windows 10 or any other OS the calls
+        simply fail silently and the title bar stays the system default."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            colors = theme_colors(theme_name)
+            hwnd = int(self.winId())
+
+            def to_colorref(hex_color: str) -> int:
+                hex_color = hex_color.lstrip("#")
+                r = int(hex_color[0:2], 16)
+                g = int(hex_color[2:4], 16)
+                b = int(hex_color[4:6], 16)
+                return r | (g << 8) | (b << 16)  # COLORREF is 0x00BBGGRR
+
+            caption_color = to_colorref(colors["bg_secondary"])
+            text_color = to_colorref(colors["text_primary"])
+
+            dwmapi = ctypes.windll.dwmapi
+            DWMWA_CAPTION_COLOR = 35
+            DWMWA_TEXT_COLOR = 36
+            c_caption = ctypes.c_int(caption_color)
+            c_text = ctypes.c_int(text_color)
+            dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ctypes.byref(c_caption), ctypes.sizeof(c_caption))
+            dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ctypes.byref(c_text), ctypes.sizeof(c_text))
+        except Exception:
+            # Best-effort cosmetic touch - never let a failed DWM call
+            # (old Windows, missing dwmapi, etc.) break theme switching.
+            pass
 
     def _refresh_icon_theme(self, theme_name: str):
         """QPushButton icons and QLabel pixmaps are baked bitmaps that QSS
@@ -1237,6 +1276,14 @@ class MainWindow(QMainWindow):
             if item is not None:
                 widget._set_category_icon(item.category)
                 widget.refresh(item)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # winId() only returns a real native handle once the window has
+        # a platform surface, which happens on/after the first show - so
+        # the very first paint of the title bar is redone here rather
+        # than relying solely on the constructor's apply_theme() call.
+        self._apply_title_bar_color(self.settings.theme)
 
     def closeEvent(self, event):
         if getattr(self, "_update_worker", None) is not None and self._update_worker.isRunning():
