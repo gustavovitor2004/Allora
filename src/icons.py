@@ -42,6 +42,12 @@ PATHS = {
         '<path d="M12 3a9 9 0 1 0 9 9c0-1.1-.9-1.9-2-1.9h-1.8a2.7 2.7 0 0 1-2.7-2.7c0-.7.3-1.4.8-1.9.5-.6.2-1.6-.6-1.8A9 9 0 0 0 12 3z"/>'
         '<circle cx="7.3" cy="10.8" r="0.9"/><circle cx="9.6" cy="7" r="0.9"/><circle cx="14.6" cy="7" r="0.9"/>'
     ),
+    # Custom title-bar window controls (see MainWindow's frameless-window
+    # setup in ui.py) - drawn thin/small since they sit in a 32px-tall strip.
+    "win-minimize": '<path d="M5 12h14"/>',
+    "win-maximize": '<rect x="5.5" y="5.5" width="13" height="13" rx="1"/>',
+    "win-restore": '<rect x="7.5" y="7.5" width="11" height="11" rx="1"/><path d="M7.5 5.5h9a2 2 0 0 1 2 2v9"/>',
+    "win-close": '<path d="M6 6l12 12M18 6L6 18"/>',
 }
 
 FILLED_ICONS = {"play"}

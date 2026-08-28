@@ -27,7 +27,7 @@ icon-bearing widget gets rebuilt when the user switches theme.
 
 import os
 
-from PySide6.QtCore import Qt, QSize, QUrl
+from PySide6.QtCore import Qt, QSize, QUrl, QPoint
 from PySide6.QtGui import QAction, QDesktopServices, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -102,6 +102,35 @@ def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
     btn.setToolTip({"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover"}.get(name, ""))
+
+
+class Header(QFrame):
+    """The app's header bar, doubling as a hand-drawn title bar for the
+    frameless MainWindow (see MainWindow's window-flag setup in ui.py).
+    Once the OS stops drawing its own caption strip, the app has to supply
+    the two things that strip used to give for free: dragging it moves the
+    window (via Qt's startSystemMove(), so Aero Snap still works), and
+    double-clicking it toggles maximize/restore. Clicks on child widgets
+    (the Tema/Configurações/window-control buttons) never reach this
+    handler in the first place - Qt only bubbles a mouse press up to the
+    parent when the widget under the cursor doesn't handle it itself,
+    which a QPushButton always does, but the plain QLabels here don't."""
+
+    def __init__(self, on_double_click, parent=None):
+        super().__init__(parent)
+        self._on_double_click = on_double_click
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            handle = self.window().windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._on_double_click()
+        super().mouseDoubleClickEvent(event)
 
 
 class NavItem(QFrame):
@@ -664,10 +693,23 @@ class MainWindow(QMainWindow):
         # change by _refresh_icon_theme(), since QPushButton icons are
         # baked pixmaps that QSS can't recolor on its own.
         self._icon_buttons: list[tuple[QPushButton, str, str]] = []
+        # Manual "fake maximize" state (see _toggle_maximize) - resizing to
+        # the screen's available geometry instead of calling the native
+        # showMaximized(), which on a frameless Windows window can end up
+        # covering the taskbar since Windows normally uses the presence of
+        # a native caption/frame to decide the maximized window shouldn't
+        # cover it.
+        self._is_pseudo_maximized = False
+        self._restore_geometry = None
 
         self.setWindowTitle("MasterApp")
         self.resize(900, 650)
         self.setMinimumSize(700, 500)
+        # No native title bar/border: the Header widget below draws its own
+        # (see the Header class, _toggle_maximize, and nativeEvent for how
+        # moving, maximize/restore, and edge resizing are reimplemented
+        # without it).
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
 
         self._build_ui()
         self._connect_manager_signals()
@@ -732,7 +774,7 @@ class MainWindow(QMainWindow):
             item.set_active(i == index)
 
     def _build_header(self) -> QFrame:
-        header = QFrame()
+        header = Header(self._toggle_maximize)
         header.setObjectName("Header")
         header.setFixedHeight(60)
         layout = QHBoxLayout(header)
@@ -767,7 +809,65 @@ class MainWindow(QMainWindow):
         about_btn.clicked.connect(self.show_about)
         layout.addWidget(about_btn)
 
+        layout.addSpacing(8)
+
+        # --- window controls (replace the OS-drawn min/max/close now that
+        # the window is frameless) --------------------------------------
+        # Not run through self._icon_buttons: that loop always renders at
+        # size=15 to match the toolbar buttons' 15px icon size, but these
+        # sit in a slimmer 32x28 slot and want a crisper 12px render - so
+        # they're refreshed alongside maximize_btn in _refresh_icon_theme().
+        self.min_btn = QPushButton()
+        self.min_btn.setObjectName("WinBtn")
+        self.min_btn.setFixedSize(32, 28)
+        self.min_btn.setIconSize(QSize(12, 12))
+        self.min_btn.setToolTip("Minimizar")
+        self.min_btn.clicked.connect(self.showMinimized)
+        layout.addWidget(self.min_btn)
+
+        # Not registered in self._icon_buttons: its icon toggles between
+        # maximize/restore depending on window state, which a theme
+        # refresh must preserve rather than resetting - see
+        # _refresh_icon_theme() and _refresh_maximize_icon().
+        self.maximize_btn = QPushButton()
+        self.maximize_btn.setObjectName("WinBtn")
+        self.maximize_btn.setFixedSize(32, 28)
+        self.maximize_btn.setIconSize(QSize(12, 12))
+        self.maximize_btn.setToolTip("Maximizar")
+        self.maximize_btn.clicked.connect(self._toggle_maximize)
+        layout.addWidget(self.maximize_btn)
+
+        self.close_btn = QPushButton()
+        self.close_btn.setObjectName("WinBtn")
+        self.close_btn.setProperty("kind", "close")
+        self.close_btn.setFixedSize(32, 28)
+        self.close_btn.setIconSize(QSize(12, 12))
+        self.close_btn.setToolTip("Fechar")
+        self.close_btn.clicked.connect(self.close)
+        layout.addWidget(self.close_btn)
+
         return header
+
+    def _toggle_maximize(self):
+        """Manual stand-in for showMaximized()/showNormal() - see the
+        comment on self._is_pseudo_maximized in __init__ for why a
+        frameless window on Windows can't just use the native call."""
+        if self._is_pseudo_maximized:
+            if self._restore_geometry is not None:
+                self.setGeometry(self._restore_geometry)
+            self._is_pseudo_maximized = False
+        else:
+            self._restore_geometry = self.geometry()
+            screen = self.screen() or QApplication.primaryScreen()
+            self.setGeometry(screen.availableGeometry())
+            self._is_pseudo_maximized = True
+        self._refresh_maximize_icon()
+
+    def _refresh_maximize_icon(self):
+        name = "win-restore" if self._is_pseudo_maximized else "win-maximize"
+        color = theme_colors(self.settings.theme)["text_secondary"]
+        self.maximize_btn.setIcon(make_icon(name, color, size=12))
+        self.maximize_btn.setToolTip("Restaurar" if self._is_pseudo_maximized else "Maximizar")
 
     def _open_theme_menu(self):
         menu = QMenu(self)
@@ -1202,45 +1302,6 @@ class MainWindow(QMainWindow):
     def apply_theme(self, theme_name: str):
         set_app_theme(QApplication.instance(), theme_name)
         self._refresh_icon_theme(theme_name)
-        self._apply_title_bar_color(theme_name)
-
-    def _apply_title_bar_color(self, theme_name: str) -> None:
-        """Recolors the native Windows title bar (the strip with the
-        minimize/maximize/close buttons, drawn by the OS - not by Qt) so
-        it blends into the theme instead of standing out as a plain white
-        bar. Uses the DWM API's undocumented-but-stable
-        DWMWA_CAPTION_COLOR/DWMWA_TEXT_COLOR attributes, only available on
-        Windows 11 (build 22000+); on Windows 10 or any other OS the calls
-        simply fail silently and the title bar stays the system default."""
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
-
-            colors = theme_colors(theme_name)
-            hwnd = int(self.winId())
-
-            def to_colorref(hex_color: str) -> int:
-                hex_color = hex_color.lstrip("#")
-                r = int(hex_color[0:2], 16)
-                g = int(hex_color[2:4], 16)
-                b = int(hex_color[4:6], 16)
-                return r | (g << 8) | (b << 16)  # COLORREF is 0x00BBGGRR
-
-            caption_color = to_colorref(colors["bg_secondary"])
-            text_color = to_colorref(colors["text_primary"])
-
-            dwmapi = ctypes.windll.dwmapi
-            DWMWA_CAPTION_COLOR = 35
-            DWMWA_TEXT_COLOR = 36
-            c_caption = ctypes.c_int(caption_color)
-            c_text = ctypes.c_int(text_color)
-            dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_CAPTION_COLOR, ctypes.byref(c_caption), ctypes.sizeof(c_caption))
-            dwmapi.DwmSetWindowAttribute(hwnd, DWMWA_TEXT_COLOR, ctypes.byref(c_text), ctypes.sizeof(c_text))
-        except Exception:
-            # Best-effort cosmetic touch - never let a failed DWM call
-            # (old Windows, missing dwmapi, etc.) break theme switching.
-            pass
 
     def _refresh_icon_theme(self, theme_name: str):
         """QPushButton icons and QLabel pixmaps are baked bitmaps that QSS
@@ -1256,6 +1317,10 @@ class MainWindow(QMainWindow):
 
         for button, icon_name, color_key in self._icon_buttons:
             button.setIcon(make_icon(icon_name, colors[color_key], size=15))
+
+        self.min_btn.setIcon(make_icon("win-minimize", colors["text_secondary"], size=12))
+        self.close_btn.setIcon(make_icon("win-close", colors["text_secondary"], size=12))
+        self._refresh_maximize_icon()
 
         set_action_icon(self.pause_btn, "play" if self.manager.paused else "pause", theme_name)
         set_action_icon(self.conv_pause_btn, "play" if self.conversion_manager.paused else "pause", theme_name)
@@ -1277,13 +1342,66 @@ class MainWindow(QMainWindow):
                 widget._set_category_icon(item.category)
                 widget.refresh(item)
 
-    def showEvent(self, event):
-        super().showEvent(event)
-        # winId() only returns a real native handle once the window has
-        # a platform surface, which happens on/after the first show - so
-        # the very first paint of the title bar is redone here rather
-        # than relying solely on the constructor's apply_theme() call.
-        self._apply_title_bar_color(self.settings.theme)
+    # ------------------------------------------------------------------
+    # Frameless-window plumbing (Windows only)
+    # ------------------------------------------------------------------
+    #
+    # Going frameless (see the Qt.FramelessWindowHint flag set in
+    # __init__) drops the OS's own edge/corner resize handling along with
+    # its title bar - Header replaces the title bar (dragging it moves the
+    # window, double-clicking toggles maximize/restore), and this restores
+    # just the resize-by-dragging-the-edge part by answering Windows'
+    # WM_NCHITTEST message for a thin border around the window. Returning
+    # one of the HTLEFT/HTRIGHT/HTTOP/HTBOTTOM(-corner) codes there is the
+    # same protocol a normal bordered window uses to tell Windows "the
+    # user grabbed an edge, start an interactive resize" - Windows handles
+    # the actual drag, cursor shape, and screen-edge snapping from there.
+    # Deliberately skipped while pseudo-maximized (see _toggle_maximize):
+    # a maximized window shouldn't be edge-resizable until it's restored.
+    _RESIZE_BORDER = 6
+
+    def nativeEvent(self, eventType, message):
+        if os.name == "nt" and eventType == b"windows_generic_MSG" and not self._is_pseudo_maximized:
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                msg = wintypes.MSG.from_address(int(message))
+                WM_NCHITTEST = 0x0084
+                if msg.message == WM_NCHITTEST:
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    pos = self.mapFromGlobal(QPoint(x, y))
+                    bw = self._RESIZE_BORDER
+                    w, h = self.width(), self.height()
+
+                    left = pos.x() < bw
+                    right = pos.x() >= w - bw
+                    top = pos.y() < bw
+                    bottom = pos.y() >= h - bw
+
+                    if top and left:
+                        return True, 13      # HTTOPLEFT
+                    if top and right:
+                        return True, 14      # HTTOPRIGHT
+                    if bottom and left:
+                        return True, 16      # HTBOTTOMLEFT
+                    if bottom and right:
+                        return True, 17      # HTBOTTOMRIGHT
+                    if left:
+                        return True, 10      # HTLEFT
+                    if right:
+                        return True, 11      # HTRIGHT
+                    if top:
+                        return True, 12      # HTTOP
+                    if bottom:
+                        return True, 15      # HTBOTTOM
+            except Exception:
+                # Best-effort - never let a malformed/unexpected native
+                # message break the window; just fall through to Qt's
+                # own handling below.
+                pass
+        return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
         if getattr(self, "_update_worker", None) is not None and self._update_worker.isRunning():

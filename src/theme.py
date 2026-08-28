@@ -362,6 +362,30 @@ def build_stylesheet(theme_name: str) -> str:
         color: {c['text_secondary']};
     }}
 
+    /* --- Custom title-bar window controls (minimize/maximize/close) ------ */
+    /* The Header doubles as the window's title bar on a frameless
+       MainWindow (see ui.py) - these three buttons replace the OS-drawn
+       ones, so they're styled to sit flush against the header instead of
+       looking like a regular toolbar button. */
+    QPushButton#WinBtn {{
+        background-color: transparent;
+        border: none;
+        border-radius: 4px;
+        padding: 0px;
+    }}
+    QPushButton#WinBtn:hover {{
+        background-color: {c['bg_hover']};
+    }}
+    QPushButton#WinBtn:pressed {{
+        background-color: {c['bg_active']};
+    }}
+    QPushButton#WinBtn[kind="close"]:hover {{
+        background-color: #e81123;
+    }}
+    QPushButton#WinBtn[kind="close"]:pressed {{
+        background-color: #f1707a;
+    }}
+
     /* --- Sidebar navigation ---------------------------------------------- */
     QFrame#Sidebar {{
         background-color: {c['bg_secondary']};
