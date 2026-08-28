@@ -670,14 +670,35 @@ class UrlInput(QPlainTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
-        # Windows overlays its own emoji/touch-keyboard flyout icon inside
-        # any focused editable control it detects via input-method
-        # association - not something MasterApp draws, but disabling this
-        # widget's input-method context is the one app-level lever that
-        # sometimes stops Windows from attaching that icon. Best-effort:
-        # it's a system feature (Settings > Time & language > Typing), so
-        # this may not suppress it on every Windows build.
+        # Qt's own WA_InputMethodEnabled only turns off Qt's IME candidate
+        # window - it does nothing to the native Win32 IME context that
+        # Windows' shell actually keys the emoji/touch-keyboard flyout icon
+        # off of. Detaching that context directly (below, once the widget
+        # has a real native handle) is the documented workaround other
+        # frameworks use for this exact icon; disabling WA_InputMethodEnabled
+        # too doesn't hurt as a secondary signal.
         self.setAttribute(Qt.WA_InputMethodEnabled, False)
+        self._detach_windows_ime()
+
+    def _detach_windows_ime(self) -> None:
+        """Removes the native IME context Windows associates with this
+        control's HWND, which is what the shell actually checks before
+        drawing its emoji/touch-keyboard flyout icon over a focused text
+        field - Qt's own input-method flag (above) doesn't touch this.
+        Trade-off: this also turns off IME composition for this field, so
+        typing Chinese/Japanese/Korean directly into it won't work (pasting
+        already-typed text is unaffected). Windows-only and best-effort -
+        wrapped so any failure just leaves the field working normally."""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+
+            self.setAttribute(Qt.WA_NativeWindow, True)
+            hwnd = int(self.winId())
+            ctypes.windll.imm32.ImmAssociateContext(hwnd, None)
+        except Exception:
+            pass
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
