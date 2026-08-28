@@ -28,6 +28,21 @@ def project_root() -> str:
         return os.path.dirname(sys.executable)
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+
+def resource_path(relative_path: str) -> str:
+    """Locate a bundled read-only asset (e.g. assets/logo.png) that ships
+    inside the app itself, as opposed to project_root()'s user-writable
+    files (config.json, tools/). Inside a frozen .exe built with PyInstaller
+    --onedir, bundled data added via --add-data lands next to the
+    executable as a real file (not a temp extraction), so the two paths
+    happen to coincide - but the meaning is different (read-only asset vs.
+    read-write app dir), so this stays a separate helper for clarity."""
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+    else:
+        base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, relative_path)
+
 # ---------------------------------------------------------------------------
 # Platform detection
 # ---------------------------------------------------------------------------

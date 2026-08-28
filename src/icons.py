@@ -63,14 +63,9 @@ PATHS = {
         '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>'
         '<path d="M19 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"/>'
     ),
-    # App mark: the "Allora A" - two bold triangular legs sharing an apex,
-    # same silhouette as the app icon baked into the .exe (see build_exe.ps1
-    # --icon and assets/icon.ico) so the in-app header badge and the
-    # taskbar/window icon read as the same logo.
-    "logo-a": '<path d="M12 4L7.2 20L10.3 20z M12 4L16.8 20L13.7 20z"/>',
 }
 
-FILLED_ICONS = {"play", "logo-a"}
+FILLED_ICONS = {"play"}
 
 
 def make_icon(name: str, color: str, size: int = 18, stroke_width: float = 1.8) -> QIcon:

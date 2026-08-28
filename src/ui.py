@@ -45,7 +45,7 @@ from icons import make_icon, make_badge
 from settings import Settings, QUALITY_CHOICES, save_settings
 from theme import apply_theme as set_app_theme, repolish, theme_colors, theme_names
 from updater import UpdateCheckWorker
-from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working
+from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path
 from version import APP_VERSION
 
 THUMB_SIZE = QSize(104, 60)
@@ -1336,14 +1336,34 @@ class MainWindow(QMainWindow):
         set_app_theme(QApplication.instance(), theme_name)
         self._refresh_icon_theme(theme_name)
 
+    def _load_logo_pixmap(self, size: int) -> QPixmap:
+        """The Allora mark, bundled as a fixed PNG asset (assets/logo.png)
+        rather than drawn from icons.py's theme-recolorable SVG set - this
+        one is a fixed piece of brand art, not a stroke icon, so it doesn't
+        adapt per theme like the rest of the UI's icons do. Rendered once
+        at 2x and given a device pixel ratio of 2 to stay crisp on
+        high-DPI displays, matching make_icon()'s convention."""
+        scale = 2
+        side = size * scale
+        source = QPixmap(resource_path("assets/logo.png"))
+        if source.isNull():
+            # Fallback so a missing/misplaced asset never crashes the app -
+            # just leaves the header logo blank instead.
+            pixmap = QPixmap(side, side)
+            pixmap.fill(Qt.transparent)
+            pixmap.setDevicePixelRatio(float(scale))
+            return pixmap
+        pixmap = source.scaled(side, side, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        pixmap.setDevicePixelRatio(float(scale))
+        return pixmap
+
     def _refresh_icon_theme(self, theme_name: str):
         """QPushButton icons and QLabel pixmaps are baked bitmaps that QSS
         can't recolor - every icon-bearing widget gets rebuilt here so a
         theme change recolors the whole UI, not just backgrounds/text."""
         colors = theme_colors(theme_name)
 
-        logo_icon = make_badge("logo-a", colors["accent"], colors["accent_ink"], diameter=34, icon_size=18)
-        self.logo_label.setPixmap(logo_icon.pixmap(34, 34))
+        self.logo_label.setPixmap(self._load_logo_pixmap(34))
 
         for item in self.nav_items:
             item.set_theme(theme_name)

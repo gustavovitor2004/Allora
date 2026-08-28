@@ -27,6 +27,7 @@ if (Test-Path "$root\Allora.spec") { Remove-Item "$root\Allora.spec" -Force }
 
 python -m PyInstaller --noconfirm --windowed --name Allora `
     --icon assets\icon.ico `
+    --add-data "assets;assets" `
     --paths src `
     --hidden-import docx2pdf `
     --collect-all pdf2docx `
