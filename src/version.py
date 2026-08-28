@@ -10,4 +10,4 @@ anything (there's no build step that stamps it in).
 APP_VERSION = "1.2.0"
 
 GITHUB_OWNER = "gustavovitor2004"
-GITHUB_REPO = "MasterApp"
+GITHUB_REPO = "Allora"

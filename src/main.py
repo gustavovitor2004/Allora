@@ -1,7 +1,7 @@
 """
 main.py
 
-Entry point for the MasterApp desktop app.
+Entry point for the Allora desktop app.
 
 Usage:
     pip install -r requirements.txt
@@ -27,7 +27,7 @@ from startup_check import verify_environment
 
 def main():
     app = QApplication(sys.argv)
-    app.setApplicationName("MasterApp")
+    app.setApplicationName("Allora")
 
     for warning in verify_environment():
         print(f"[AVISO] {warning}")
@@ -44,7 +44,7 @@ def main():
         error_text = traceback.format_exc()
         QMessageBox.critical(
             None,
-            "Erro ao iniciar o MasterApp",
+            "Erro ao iniciar o Allora",
             f"Ocorreu um erro inesperado ao iniciar o aplicativo:\n\n{error_text}",
         )
         sys.exit(1)

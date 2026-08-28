@@ -7,16 +7,16 @@ raises) if anything is missing. Called once from main.py before the GUI
 is created.
 
 This is a diagnostic safety net, not the primary install mechanism -
-MasterApp.bat is what actually installs everything on first run. This
+Allora.bat is what actually installs everything on first run. This
 module exists for the case where the app gets launched some other way
-(e.g. `python src/main.py` directly, skipping MasterApp.bat) and something
+(e.g. `python src/main.py` directly, skipping Allora.bat) and something
 is still missing, so the user gets one clear, all-in-one heads-up printed
 to the console instead of a raw traceback deep inside some unrelated
 feature the first time they touch it.
 
 Reuses utils.find_ffmpeg()/find_poppler_bin_dir() rather than
 re-implementing PATH/tools-folder detection here, so this stays in sync
-with wherever MasterApp.bat actually puts things.
+with wherever Allora.bat actually puts things.
 """
 
 import importlib
@@ -58,14 +58,14 @@ def verify_environment() -> list:
     if not ffmpeg_is_working(find_ffmpeg()):
         warnings.append(
             "ffmpeg não encontrado - necessário para baixar/converter vídeo. "
-            "Rode MasterApp.bat novamente, ou baixe manualmente em "
+            "Rode Allora.bat novamente, ou baixe manualmente em "
             "https://ffmpeg.org/download.html"
         )
 
     if not find_poppler_bin_dir():
         warnings.append(
             "Poppler não encontrado - necessário para converter PDFs na aba "
-            "Documentos. Rode MasterApp.bat novamente, ou baixe manualmente em "
+            "Documentos. Rode Allora.bat novamente, ou baixe manualmente em "
             "https://github.com/oschwartz10612/poppler-windows/releases"
         )
 

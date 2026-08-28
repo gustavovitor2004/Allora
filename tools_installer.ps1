@@ -1,7 +1,7 @@
 <#
 .SYNOPSIS
     Downloads a portable ffmpeg or Poppler build into tools/<component>,
-    called by MasterApp.bat on first run. Never touches the system PATH or
+    called by Allora.bat on first run. Never touches the system PATH or
     requires administrator rights - the app itself knows to look inside
     tools/ as a fallback (see utils.find_ffmpeg / utils.find_poppler_bin_dir).
 
@@ -12,8 +12,8 @@
     Path to the project's tools/ folder (created if missing).
 
 .NOTES
-    Exit code 0 on success, 1 on any failure - MasterApp.bat checks this to
-    decide whether it's safe to write the .masterapp_installed marker.
+    Exit code 0 on success, 1 on any failure - Allora.bat checks this to
+    decide whether it's safe to write the .allora_installed marker.
 #>
 param(
     [Parameter(Mandatory = $true)]

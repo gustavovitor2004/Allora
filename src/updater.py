@@ -2,7 +2,7 @@
 updater.py
 
 Best-effort startup check against GitHub Releases: is a newer version of
-MasterApp available? Runs on a background QThread so a slow or unreachable
+Allora available? Runs on a background QThread so a slow or unreachable
 network never delays the window from opening, and any failure (offline,
 GitHub down, rate-limited) is swallowed silently - this is a convenience
 nag, not a feature the app depends on, so it must never surface an error
@@ -48,7 +48,7 @@ class UpdateCheckWorker(QThread):
         try:
             request = urllib.request.Request(
                 _API_URL,
-                headers={"Accept": "application/vnd.github+json", "User-Agent": "MasterApp"},
+                headers={"Accept": "application/vnd.github+json", "User-Agent": "Allora"},
             )
             with urllib.request.urlopen(request, timeout=6) as response:
                 data = json.load(response)
