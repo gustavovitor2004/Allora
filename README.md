@@ -17,9 +17,10 @@ Uso pessoal e livre: qualquer um pode baixar, usar e redistribuir (veja
 
 ## Instalação e uso
 
-1. Baixe `Allora-standalone.zip` da [página de
+1. Baixe `Allora.rar` da [página de
    Releases](https://github.com/gustavovitor2004/Allora/releases) e
-   extraia em qualquer pasta.
+   extraia em qualquer pasta (precisa do [WinRAR](https://www.win-rar.com/)
+   ou [7-Zip](https://www.7-zip.org/) para extrair `.rar`).
 2. Dê duplo clique em `Allora.exe` dentro dela.
 
 Pronto — não precisa instalar Python, ffmpeg, Poppler nem rodar nenhum
@@ -34,7 +35,7 @@ código-fonte.
 
 Não há nada registrado no Windows para desfazer — o `.exe` não mexe no
 registro, no `PATH` do sistema nem em nenhuma pasta fora de onde você
-extraiu o `.zip`. Para remover o Allora, basta apagar a pasta onde você
+extraiu o `.rar`. Para remover o Allora, basta apagar a pasta onde você
 extraiu (`config.json` e a pasta `tools\` ficam dentro dela).
 
 ## Como usar
@@ -199,8 +200,8 @@ tiver), e rode:
 Isso gera `dist\Allora\Allora.exe` via PyInstaller (embute o interpretador
 Python e todas as bibliotecas). Copie `tools\ffmpeg` e `tools\poppler` para
 dentro de `dist\Allora\tools\` (o `.exe` procura ali), e compacte a pasta
-`dist\Allora\` inteira em `.zip` para publicar como release — esse é o
-`Allora-standalone.zip`.
+`dist\Allora\` inteira em `.rar` (ou `.zip`) para publicar como release —
+esse é o `Allora.rar` disponível na página de Releases.
 
 O `.exe` fica grande (~300MB compactado, ~700MB extraído) porque leva o
 Python e todas as bibliotecas (PySide6, OpenCV etc.) embutidos — é a troca
@@ -268,7 +269,7 @@ python src/main.py
 
 | Problema | Causa provável | Solução |
 |---|---|---|
-| "ffmpeg não encontrado" | O `.exe` não encontra `tools\ffmpeg\ffmpeg.exe` | Confirme que a pasta `tools\` está junto do `Allora.exe` (extraída do mesmo `.zip`), ou informe um caminho customizado em Configurações |
+| "ffmpeg não encontrado" | O `.exe` não encontra `tools\ffmpeg\ffmpeg.exe` | Confirme que a pasta `tools\` está junto do `Allora.exe` (extraída do mesmo `.rar`), ou informe um caminho customizado em Configurações |
 | Item fica "Indisponível" | Vídeo privado, removido ou exige login | Nada a fazer no app — o conteúdo não está acessível publicamente |
 | Download trava em 0% | Link inválido ou plataforma não suportada pelo yt-dlp | Verifique a URL; consulte a lista de extratores do yt-dlp |
 | Qualidade baixada é menor que a selecionada | A plataforma não oferece aquele stream para este vídeo | Comportamento esperado — o app mostra a qualidade real ao lado do título |
