@@ -159,7 +159,7 @@ def find_ffmpeg(custom_path: str = "") -> str:
             if os.path.isfile(winget_shim):
                 return winget_shim
 
-        # MasterApp.bat downloads a portable ffmpeg into tools/ffmpeg on
+        # Allora.bat downloads a portable ffmpeg into tools/ffmpeg on
         # first run when it isn't already on PATH - never registered
         # system-wide, so this fixed, predictable location is the only way
         # the app can find it.
@@ -194,7 +194,7 @@ def find_poppler_bin_dir(custom_path: str = "") -> str:
         return os.path.dirname(found)
 
     if os.name == "nt":
-        # Same idea as find_ffmpeg()'s tools/ffmpeg fallback: MasterApp.bat
+        # Same idea as find_ffmpeg()'s tools/ffmpeg fallback: Allora.bat
         # downloads a portable Poppler into tools/poppler when it isn't
         # already on PATH.
         bundled = os.path.join(project_root(), "tools", "poppler", pdftoppm_name)

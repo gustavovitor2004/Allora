@@ -1,7 +1,7 @@
 """
 theme.py
 
-Centralized theme system for MasterApp: a gallery of complete, independently
+Centralized theme system for Allora: a gallery of complete, independently
 designed themes (not just one palette with a light/dark switch) - each one
 carries its own colors, fonts, corner radius and border weight, and a couple
 of structural flags (tab style, accent-on-accent text color) that change how

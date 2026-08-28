@@ -731,7 +731,7 @@ class MainWindow(QMainWindow):
         self._is_pseudo_maximized = False
         self._restore_geometry = None
 
-        self.setWindowTitle("MasterApp")
+        self.setWindowTitle("Allora")
         self.resize(900, 650)
         self.setMinimumSize(700, 500)
         # No native title bar/border: the Header widget below draws its own
@@ -814,7 +814,7 @@ class MainWindow(QMainWindow):
         self.logo_label = QLabel()
         self.logo_label.setFixedSize(34, 34)
         layout.addWidget(self.logo_label)
-        title = QLabel("MasterApp")
+        title = QLabel("Allora")
         title.setObjectName("HeaderTitle")
         layout.addWidget(title)
         layout.addStretch(1)
@@ -1272,7 +1272,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "Sobre",
-            f"MasterApp {APP_VERSION}\n\n"
+            f"Allora {APP_VERSION}\n\n"
             "Baixe vídeos do YouTube, Instagram, Twitter/X, TikTok e mais, "
             "usando yt-dlp.\n\n"
             "Cole um link, escolha a qualidade e clique em Adicionar. "
@@ -1309,7 +1309,7 @@ class MainWindow(QMainWindow):
         box.setWindowTitle("Nova versão disponível")
         box.setIcon(QMessageBox.Information)
         box.setText(
-            f"Uma nova versão do MasterApp está disponível: {tag_name}\n"
+            f"Uma nova versão do Allora está disponível: {tag_name}\n"
             f"(você está usando a {APP_VERSION}).\n\n"
             "Quer abrir a página de download no GitHub?"
         )
