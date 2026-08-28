@@ -29,8 +29,9 @@ from PySide6.QtWidgets import (
 from documentos import scanner_engine
 from documentos import converter as doc_converter
 from documentos.workers import ScannerWorker, ConversionWorker
+from icons import make_icon
 from settings import save_settings
-from theme import repolish
+from theme import repolish, theme_colors
 from utils import format_size
 
 
@@ -183,6 +184,7 @@ class ScannerSubTab(QWidget):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
+        self.theme_name = settings.theme
         self.current_path = None
         self.original_pixmap = None
         self.result_image = None      # processed BGR numpy array
@@ -227,8 +229,9 @@ class ScannerSubTab(QWidget):
         right_layout.addWidget(self.result_label, stretch=1)
 
         result_footer = QHBoxLayout()
-        self.toggle_view_btn = QPushButton("👁 Ver original")
+        self.toggle_view_btn = QPushButton(" Ver original")
         self.toggle_view_btn.setObjectName("Ghost")
+        self.toggle_view_btn.setIconSize(QSize(15, 15))
         self.toggle_view_btn.setEnabled(False)
         self.toggle_view_btn.clicked.connect(self.on_toggle_view)
         result_footer.addWidget(self.toggle_view_btn)
@@ -257,13 +260,15 @@ class ScannerSubTab(QWidget):
 
         # --- select / scan ------------------------------------------------------
         action_row = QHBoxLayout()
-        self.select_btn = QPushButton("📂 Selecionar Imagem")
+        self.select_btn = QPushButton(" Selecionar Imagem")
         self.select_btn.setObjectName("Secondary")
+        self.select_btn.setIconSize(QSize(15, 15))
         self.select_btn.clicked.connect(self.on_select_file)
         action_row.addWidget(self.select_btn)
 
-        self.scan_btn = QPushButton("✨ Digitalizar")
+        self.scan_btn = QPushButton(" Digitalizar")
         self.scan_btn.setObjectName("Primary")
+        self.scan_btn.setIconSize(QSize(15, 15))
         self.scan_btn.setEnabled(False)
         self.scan_btn.clicked.connect(self.on_scan_clicked)
         action_row.addWidget(self.scan_btn)
@@ -278,31 +283,52 @@ class ScannerSubTab(QWidget):
 
         # --- save row --------------------------------------------------------
         save_row = QHBoxLayout()
-        self.save_jpeg_btn = QPushButton("💾 JPEG")
+        self.save_jpeg_btn = QPushButton(" JPEG")
         self.save_jpeg_btn.setObjectName("Secondary")
+        self.save_jpeg_btn.setIconSize(QSize(14, 14))
         self.save_jpeg_btn.setEnabled(False)
         self.save_jpeg_btn.clicked.connect(lambda: self.on_save_as("jpeg"))
         save_row.addWidget(self.save_jpeg_btn)
 
-        self.save_png_btn = QPushButton("💾 PNG")
+        self.save_png_btn = QPushButton(" PNG")
         self.save_png_btn.setObjectName("Secondary")
+        self.save_png_btn.setIconSize(QSize(14, 14))
         self.save_png_btn.setEnabled(False)
         self.save_png_btn.clicked.connect(lambda: self.on_save_as("png"))
         save_row.addWidget(self.save_png_btn)
 
-        self.save_pdf_btn = QPushButton("💾 PDF")
+        self.save_pdf_btn = QPushButton(" PDF")
         self.save_pdf_btn.setObjectName("Secondary")
+        self.save_pdf_btn.setIconSize(QSize(14, 14))
         self.save_pdf_btn.setEnabled(False)
         self.save_pdf_btn.clicked.connect(lambda: self.on_save_as("pdf"))
         save_row.addWidget(self.save_pdf_btn)
 
-        self.reset_btn = QPushButton("🔄 Processar outra imagem")
+        self.reset_btn = QPushButton(" Processar outra imagem")
         self.reset_btn.setObjectName("Ghost")
+        self.reset_btn.setIconSize(QSize(14, 14))
         self.reset_btn.clicked.connect(self.on_reset)
         save_row.addWidget(self.reset_btn)
 
         save_row.addStretch(1)
         layout.addLayout(save_row)
+
+        self.set_theme(self.theme_name)
+
+    def set_theme(self, theme_name: str):
+        """Recolors every icon-bearing button in this sub-tab - called on
+        construction and again whenever MainWindow switches theme (see
+        DocumentosTab.set_theme), the same pattern ui.py uses for its own
+        icon buttons since QPushButton icons are baked pixmaps QSS can't
+        recolor on its own."""
+        self.theme_name = theme_name
+        colors = theme_colors(theme_name)
+        self.toggle_view_btn.setIcon(make_icon("eye", colors["text_secondary"], size=15))
+        self.select_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
+        self.scan_btn.setIcon(make_icon("sparkle", colors["accent_ink"], size=15))
+        for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
+            btn.setIcon(make_icon("download", colors["text_primary"], size=14))
+        self.reset_btn.setIcon(make_icon("retry", colors["text_secondary"], size=14))
 
     def _section_label(self, text):
         label = QLabel(text)
@@ -361,7 +387,7 @@ class ScannerSubTab(QWidget):
         self.result_label.setPixmap(QPixmap())
         self.result_label.setText("Nenhum resultado ainda")
         self.toggle_view_btn.setEnabled(False)
-        self.toggle_view_btn.setText("👁 Ver original")
+        self.toggle_view_btn.setText(" Ver original")
         self.elapsed_label.setText("")
         for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
             btn.setEnabled(False)
@@ -403,7 +429,7 @@ class ScannerSubTab(QWidget):
         self.scan_btn.setEnabled(True)
         self.select_btn.setEnabled(True)
         self.toggle_view_btn.setEnabled(True)
-        self.toggle_view_btn.setText("👁 Ver original")
+        self.toggle_view_btn.setText(" Ver original")
         for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
             btn.setEnabled(True)
         self.elapsed_label.setText(f"Processado em {elapsed:.1f}s")
@@ -421,7 +447,7 @@ class ScannerSubTab(QWidget):
     def on_toggle_view(self):
         self.showing_original = not self.showing_original
         self.toggle_view_btn.setText(
-            "👁 Ver digitalizado" if self.showing_original else "👁 Ver original"
+            " Ver digitalizado" if self.showing_original else " Ver original"
         )
         self._refresh_result_display()
 
@@ -480,7 +506,7 @@ class ScannerSubTab(QWidget):
         self.result_label.setText("Nenhum resultado ainda")
         self.scan_btn.setEnabled(False)
         self.toggle_view_btn.setEnabled(False)
-        self.toggle_view_btn.setText("👁 Ver original")
+        self.toggle_view_btn.setText(" Ver original")
         self.elapsed_label.setText("")
         for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
             btn.setEnabled(False)
@@ -514,16 +540,17 @@ class DocConversionItemWidget(QFrame):
         STATUS_UNSUPPORTED: "waiting",
     }
 
-    def __init__(self, on_delete=None, parent=None):
+    def __init__(self, on_delete=None, theme_name: str = "classic_dark", parent=None):
         super().__init__(parent)
         self.setObjectName("Card")
         self.status_kind = self.STATUS_WAITING
+        self.theme_name = theme_name
         layout = QHBoxLayout(self)
         layout.setContentsMargins(10, 8, 10, 8)
 
-        # Drag handle (⠿), visible only when merge mode is active - lets
+        # Drag handle (⣿), visible only when merge mode is active - lets
         # the user reorder the pages of the final merged PDF.
-        self.handle_label = QLabel("⠿")
+        self.handle_label = QLabel("⣿")
         self.handle_label.setObjectName("Dim")
         self.handle_label.setFixedWidth(18)
         self.handle_label.setVisible(False)
@@ -549,13 +576,16 @@ class DocConversionItemWidget(QFrame):
 
         # Compact per-row delete button - reuses the #Danger variant (red,
         # transparent until hover) shared with the rest of the app.
-        self.delete_btn = QPushButton("✕")
+        self.delete_btn = QPushButton()
         self.delete_btn.setObjectName("Danger")
         self.delete_btn.setFixedWidth(28)
+        self.delete_btn.setIconSize(QSize(13, 13))
         self.delete_btn.setToolTip("Remover da lista")
         if on_delete:
             self.delete_btn.clicked.connect(on_delete)
         layout.addWidget(self.delete_btn)
+
+        self.set_theme(theme_name)
 
     def set_file(self, path):
         try:
@@ -582,6 +612,11 @@ class DocConversionItemWidget(QFrame):
     def set_merge_mode(self, active: bool):
         self.handle_label.setVisible(active)
 
+    def set_theme(self, theme_name: str):
+        self.theme_name = theme_name
+        colors = theme_colors(theme_name)
+        self.delete_btn.setIcon(make_icon("x", colors["error"], size=13))
+
 
 class ConvertSubTab(QWidget):
     """Feature 2 - Conversão de Formato: batch-convert images, PDFs, DOCX
@@ -590,6 +625,7 @@ class ConvertSubTab(QWidget):
     def __init__(self, settings, parent=None):
         super().__init__(parent)
         self.settings = settings
+        self.theme_name = settings.theme
         self.jobs = []              # list of {"id": int, "path": str}, in display order
         self._item_widgets = {}     # job id -> DocConversionItemWidget
         self._next_job_id = itertools.count(1)
@@ -604,13 +640,15 @@ class ConvertSubTab(QWidget):
         layout.setSpacing(10)
 
         top_row = QHBoxLayout()
-        self.add_btn = QPushButton("+ Adicionar arquivos")
+        self.add_btn = QPushButton(" Adicionar arquivos")
         self.add_btn.setObjectName("Primary")
+        self.add_btn.setIconSize(QSize(14, 14))
         self.add_btn.clicked.connect(self.on_add_files)
         top_row.addWidget(self.add_btn)
 
-        self.remove_all_btn = QPushButton("🗑 Remover todos")
+        self.remove_all_btn = QPushButton(" Remover todos")
         self.remove_all_btn.setObjectName("Secondary")
+        self.remove_all_btn.setIconSize(QSize(14, 14))
         self.remove_all_btn.clicked.connect(self.on_remove_all)
         top_row.addWidget(self.remove_all_btn)
 
@@ -621,8 +659,9 @@ class ConvertSubTab(QWidget):
         top_row.addWidget(self.target_combo)
 
         top_row.addStretch(1)
-        self.convert_btn = QPushButton("▶ Converter")
+        self.convert_btn = QPushButton(" Converter")
         self.convert_btn.setObjectName("Primary")
+        self.convert_btn.setIconSize(QSize(14, 14))
         self.convert_btn.setEnabled(False)
         self.convert_btn.clicked.connect(self.on_convert_clicked)
         top_row.addWidget(self.convert_btn)
@@ -633,10 +672,11 @@ class ConvertSubTab(QWidget):
         self.folder_label = QLabel(self.settings.doc_convert_output_dir)
         self.folder_label.setObjectName("Dim")
         folder_row.addWidget(self.folder_label, stretch=1)
-        folder_btn = QPushButton("📁 Escolher")
-        folder_btn.setObjectName("Secondary")
-        folder_btn.clicked.connect(self.on_choose_folder)
-        folder_row.addWidget(folder_btn)
+        self.folder_btn = QPushButton(" Escolher")
+        self.folder_btn.setObjectName("Secondary")
+        self.folder_btn.setIconSize(QSize(14, 14))
+        self.folder_btn.clicked.connect(self.on_choose_folder)
+        folder_row.addWidget(self.folder_btn)
         layout.addLayout(folder_row)
 
         # "Mesclar tudo em um único PDF" - appears whenever the destination
@@ -669,11 +709,28 @@ class ConvertSubTab(QWidget):
         bottom_row.addWidget(self.overall_status_label)
         layout.addLayout(bottom_row)
 
-        self.open_folder_btn = QPushButton("📂 Abrir pasta de saída")
+        self.open_folder_btn = QPushButton(" Abrir pasta de saída")
         self.open_folder_btn.setObjectName("Secondary")
+        self.open_folder_btn.setIconSize(QSize(14, 14))
         self.open_folder_btn.setEnabled(False)
         self.open_folder_btn.clicked.connect(self.on_open_folder)
         layout.addWidget(self.open_folder_btn)
+
+        self.set_theme(self.theme_name)
+
+    def set_theme(self, theme_name: str):
+        """Recolors this sub-tab's icon buttons and cascades to every
+        already-added file row - see ScannerSubTab.set_theme for why this
+        has to happen explicitly rather than through QSS."""
+        self.theme_name = theme_name
+        colors = theme_colors(theme_name)
+        self.add_btn.setIcon(make_icon("plus", colors["accent_ink"], size=14))
+        self.remove_all_btn.setIcon(make_icon("trash", colors["text_primary"], size=14))
+        self.convert_btn.setIcon(make_icon("play", colors["accent_ink"], size=14))
+        self.folder_btn.setIcon(make_icon("folder", colors["text_primary"], size=14))
+        self.open_folder_btn.setIcon(make_icon("folder", colors["text_primary"], size=14))
+        for widget in self._item_widgets.values():
+            widget.set_theme(theme_name)
 
     # ------------------------------------------------------------------
     # File selection
@@ -707,7 +764,10 @@ class ConvertSubTab(QWidget):
         job_id = next(self._next_job_id)
         self.jobs.append({"id": job_id, "path": path})
 
-        widget = DocConversionItemWidget(on_delete=lambda _checked=False, jid=job_id: self._on_delete_clicked(jid))
+        widget = DocConversionItemWidget(
+            on_delete=lambda _checked=False, jid=job_id: self._on_delete_clicked(jid),
+            theme_name=self.theme_name,
+        )
         widget.set_file(path)
         widget.set_merge_mode(self.merge_checkbox.isChecked())
 
@@ -1020,10 +1080,26 @@ class DocumentosTab(QWidget):
 
     def __init__(self, settings, parent=None):
         super().__init__(parent)
+        self.theme_name = settings.theme
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        sub_tabs = QTabWidget()
-        sub_tabs.addTab(ScannerSubTab(settings), "🔍 Digitalizar")
-        sub_tabs.addTab(ConvertSubTab(settings), "🔄 Converter Formato")
-        layout.addWidget(sub_tabs)
+        self.sub_tabs = QTabWidget()
+        self.scanner_tab = ScannerSubTab(settings)
+        self.convert_tab = ConvertSubTab(settings)
+        self.sub_tabs.addTab(self.scanner_tab, "Digitalizar")
+        self.sub_tabs.addTab(self.convert_tab, "Converter Formato")
+        layout.addWidget(self.sub_tabs)
+
+        self.set_theme(self.theme_name)
+
+    def set_theme(self, theme_name: str):
+        """Cascades a theme change into both sub-tabs and recolors the
+        sub-tab bar's own icons - called from MainWindow._refresh_icon_theme
+        alongside every other icon-bearing part of the app."""
+        self.theme_name = theme_name
+        colors = theme_colors(theme_name)
+        self.scanner_tab.set_theme(theme_name)
+        self.convert_tab.set_theme(theme_name)
+        self.sub_tabs.setTabIcon(0, make_icon("search", colors["text_secondary"], size=15))
+        self.sub_tabs.setTabIcon(1, make_icon("convert", colors["text_secondary"], size=15))

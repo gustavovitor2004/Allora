@@ -52,6 +52,17 @@ PATHS = {
         '<circle cx="12" cy="12" r="9"/>'
         '<path d="M9.1 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.5 2-2.6 3.7"/><path d="M12 17.3h.01"/>'
     ),
+    # Documentos tab (scanner + converter) - replaces the emoji glyphs
+    # ("🔍 🔄 ✨ 👁 💾") that used to stand in for these actions.
+    "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/>',
+    "eye": (
+        '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/>'
+        '<circle cx="12" cy="12" r="3"/>'
+    ),
+    "sparkle": (
+        '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>'
+        '<path d="M19 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"/>'
+    ),
 }
 
 FILLED_ICONS = {"play"}

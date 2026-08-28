@@ -769,7 +769,8 @@ class MainWindow(QMainWindow):
         self.stack = QStackedWidget()
         self.stack.addWidget(self._build_downloads_tab())
         self.stack.addWidget(self._build_converter_tab())
-        self.stack.addWidget(DocumentosTab(self.settings))
+        self.documentos_tab = DocumentosTab(self.settings)
+        self.stack.addWidget(self.documentos_tab)
         body_layout.addWidget(self.stack, stretch=1)
 
         root.addWidget(body, stretch=1)
@@ -1353,6 +1354,8 @@ class MainWindow(QMainWindow):
         self.min_btn.setIcon(make_icon("win-minimize", colors["text_secondary"], size=12))
         self.close_btn.setIcon(make_icon("win-close", colors["text_secondary"], size=12))
         self._refresh_maximize_icon()
+
+        self.documentos_tab.set_theme(theme_name)
 
         set_action_icon(self.pause_btn, "play" if self.manager.paused else "pause", theme_name)
         set_action_icon(self.conv_pause_btn, "play" if self.conversion_manager.paused else "pause", theme_name)
