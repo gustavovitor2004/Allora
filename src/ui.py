@@ -803,10 +803,13 @@ class MainWindow(QMainWindow):
         self._icon_buttons.append((self.settings_btn, "gear", "text_primary"))
         layout.addWidget(self.settings_btn)
 
-        about_btn = QPushButton("?")
+        about_btn = QPushButton()
         about_btn.setObjectName("Ghost")
         about_btn.setFixedWidth(36)
+        about_btn.setIconSize(QSize(16, 16))
+        about_btn.setToolTip("Sobre")
         about_btn.clicked.connect(self.show_about)
+        self._icon_buttons.append((about_btn, "help-circle", "text_secondary"))
         layout.addWidget(about_btn)
 
         layout.addSpacing(8)

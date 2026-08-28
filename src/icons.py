@@ -48,6 +48,10 @@ PATHS = {
     "win-maximize": '<rect x="5.5" y="5.5" width="13" height="13" rx="1"/>',
     "win-restore": '<rect x="7.5" y="7.5" width="11" height="11" rx="1"/><path d="M7.5 5.5h9a2 2 0 0 1 2 2v9"/>',
     "win-close": '<path d="M6 6l12 12M18 6L6 18"/>',
+    "help-circle": (
+        '<circle cx="12" cy="12" r="9"/>'
+        '<path d="M9.1 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.5 2-2.6 3.7"/><path d="M12 17.3h.01"/>'
+    ),
 }
 
 FILLED_ICONS = {"play"}
