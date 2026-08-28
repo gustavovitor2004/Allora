@@ -2,5 +2,4 @@ __pycache__/
 *.pyc
 config.json
 *.info.json
-.allora_installed
 tools/
