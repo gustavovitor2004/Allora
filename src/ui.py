@@ -670,6 +670,14 @@ class UrlInput(QPlainTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
+        # Windows overlays its own emoji/touch-keyboard flyout icon inside
+        # any focused editable control it detects via input-method
+        # association - not something MasterApp draws, but disabling this
+        # widget's input-method context is the one app-level lever that
+        # sometimes stops Windows from attaching that icon. Best-effort:
+        # it's a system feature (Settings > Time & language > Typing), so
+        # this may not suppress it on every Windows build.
+        self.setAttribute(Qt.WA_InputMethodEnabled, False)
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
