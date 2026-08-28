@@ -1342,7 +1342,7 @@ class MainWindow(QMainWindow):
         theme change recolors the whole UI, not just backgrounds/text."""
         colors = theme_colors(theme_name)
 
-        logo_icon = make_badge("download", colors["accent"], colors["accent_ink"], diameter=34, icon_size=17)
+        logo_icon = make_badge("logo-a", colors["accent"], colors["accent_ink"], diameter=34, icon_size=18)
         self.logo_label.setPixmap(logo_icon.pixmap(34, 34))
 
         for item in self.nav_items:

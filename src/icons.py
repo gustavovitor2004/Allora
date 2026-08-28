@@ -2,7 +2,7 @@
 icons.py
 
 Small stroke-style SVG icon set, rendered to QIcon at request time. Replaces
-the emoji glyphs the UI used to lean on (🟥 🎬 📁 ▶ etc.) - emoji render
+the emoji glyphs the UI used to lean on (\U0001f7e5 \U0001f3ac \U0001f4c1 ▶ etc.) - emoji render
 inconsistently across Windows font configurations and read as placeholder
 art rather than a designed interface.
 
@@ -53,7 +53,7 @@ PATHS = {
         '<path d="M9.1 9.3a2.9 2.9 0 0 1 5.6 1c0 1.9-2.5 2-2.6 3.7"/><path d="M12 17.3h.01"/>'
     ),
     # Documentos tab (scanner + converter) - replaces the emoji glyphs
-    # ("🔍 🔄 ✨ 👁 💾") that used to stand in for these actions.
+    # ("\U0001f50d \U0001f504 ✨ \U0001f441 \U0001f4be") that used to stand in for these actions.
     "search": '<circle cx="10.5" cy="10.5" r="6.5"/><path d="M15.5 15.5L20 20"/>',
     "eye": (
         '<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/>'
@@ -63,9 +63,14 @@ PATHS = {
         '<path d="M12 3l1.6 4.6L18 9l-4.4 1.4L12 15l-1.6-4.6L6 9l4.4-1.4L12 3z"/>'
         '<path d="M19 14l.9 2.1 2.1.9-2.1.9-.9 2.1-.9-2.1-2.1-.9 2.1-.9.9-2.1z"/>'
     ),
+    # App mark: the "Allora A" - two bold triangular legs sharing an apex,
+    # same silhouette as the app icon baked into the .exe (see build_exe.ps1
+    # --icon and assets/icon.ico) so the in-app header badge and the
+    # taskbar/window icon read as the same logo.
+    "logo-a": '<path d="M12 4L7.2 20L10.3 20z M12 4L16.8 20L13.7 20z"/>',
 }
 
-FILLED_ICONS = {"play"}
+FILLED_ICONS = {"play", "logo-a"}
 
 
 def make_icon(name: str, color: str, size: int = 18, stroke_width: float = 1.8) -> QIcon:
