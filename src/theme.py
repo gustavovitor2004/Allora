@@ -53,6 +53,7 @@ from PySide6.QtWidgets import QApplication
 THEMES = {
     "classic_dark": {
         "label": "Clássico — Escuro",
+        "is_light": False,
         "bg_primary": "#0b0b0d", "bg_secondary": "#111113", "bg_surface": "#17171a",
         "bg_surface2": "#1d1d21", "bg_hover": "#202024", "bg_active": "#26262b",
         "accent": "#e63946", "accent_hover": "#c1121f", "accent_soft": "rgba(230, 57, 70, 0.14)",
@@ -68,6 +69,7 @@ THEMES = {
     },
     "classic_light": {
         "label": "Clássico — Claro",
+        "is_light": True,
         "bg_primary": "#faf8f6", "bg_secondary": "#ffffff", "bg_surface": "#f1eeeb",
         "bg_surface2": "#e7e2dd", "bg_hover": "#ece7e2", "bg_active": "#e2dcd6",
         "accent": "#d62828", "accent_hover": "#a31621", "accent_soft": "rgba(214, 40, 40, 0.10)",
@@ -83,6 +85,7 @@ THEMES = {
     },
     "terminal": {
         "label": "Terminal Utility",
+        "is_light": False,
         "bg_primary": "#0d0d0c", "bg_secondary": "#131311", "bg_surface": "#161614",
         "bg_surface2": "#1c1c19", "bg_hover": "#232320", "bg_active": "#2a2a26",
         "accent": "#ffb000", "accent_hover": "#e09e00", "accent_soft": "rgba(255, 176, 0, 0.14)",
@@ -98,6 +101,7 @@ THEMES = {
     },
     "paper_light": {
         "label": "Paper & Ink",
+        "is_light": True,
         "bg_primary": "#eef0e9", "bg_secondary": "#f6f7f1", "bg_surface": "#f6f7f1",
         "bg_surface2": "#e2e5d9", "bg_hover": "#e8ebe0", "bg_active": "#dde1d3",
         "accent": "#2f6f62", "accent_hover": "#255a4f", "accent_soft": "rgba(47, 111, 98, 0.12)",
@@ -113,6 +117,7 @@ THEMES = {
     },
     "paper_dark": {
         "label": "Paper & Ink — Noite",
+        "is_light": False,
         "bg_primary": "#161d19", "bg_secondary": "#1a221d", "bg_surface": "#1e2620",
         "bg_surface2": "#232c25", "bg_hover": "#283128", "bg_active": "#2d372e",
         "accent": "#4fa393", "accent_hover": "#3f8a7c", "accent_soft": "rgba(79, 163, 147, 0.16)",
@@ -128,6 +133,7 @@ THEMES = {
     },
     "poster_light": {
         "label": "Poster Maximalista",
+        "is_light": True,
         "bg_primary": "#ffffff", "bg_secondary": "#ffffff", "bg_surface": "#ffffff",
         "bg_surface2": "#f0f0f0", "bg_hover": "#f4f4f4", "bg_active": "#e8e8e8",
         "accent": "#2f4bff", "accent_hover": "#2038d1", "accent_soft": "#f4e409",
@@ -143,6 +149,7 @@ THEMES = {
     },
     "poster_dark": {
         "label": "Poster Maximalista — Noite",
+        "is_light": False,
         "bg_primary": "#0d0d0d", "bg_secondary": "#0d0d0d", "bg_surface": "#0d0d0d",
         "bg_surface2": "#1c1c1c", "bg_hover": "#181818", "bg_active": "#242424",
         "accent": "#4a63ff", "accent_hover": "#3349e6", "accent_soft": "#f4e409",
@@ -158,6 +165,7 @@ THEMES = {
     },
     "glass": {
         "label": "Console de Vidro",
+        "is_light": False,
         "bg_primary": "#0b0d14", "bg_secondary": "#0e1119", "bg_surface": "rgba(255, 255, 255, 0.025)",
         "bg_surface2": "rgba(255, 255, 255, 0.05)", "bg_hover": "rgba(255, 255, 255, 0.06)",
         "bg_active": "rgba(255, 255, 255, 0.09)",
@@ -174,6 +182,7 @@ THEMES = {
     },
     "sunset": {
         "label": "Pôr do Sol",
+        "is_light": False,
         "bg_primary": "#1c1512", "bg_secondary": "#211915", "bg_surface": "#241a15",
         "bg_surface2": "#33261f", "bg_hover": "#2b2019", "bg_active": "#382a22",
         "accent": "#ff7a59", "accent_hover": "#e6663f", "accent_soft": "rgba(255, 122, 89, 0.14)",
@@ -189,6 +198,7 @@ THEMES = {
     },
     "ice": {
         "label": "Precisão Gelo",
+        "is_light": False,
         "bg_primary": "#10151c", "bg_secondary": "#141a22", "bg_surface": "#141a22",
         "bg_surface2": "#1a2129", "bg_hover": "#1e2630", "bg_active": "#232c37",
         "accent": "#3ecfd6", "accent_hover": "#2fb3ba", "accent_soft": "rgba(62, 207, 214, 0.14)",
@@ -204,6 +214,7 @@ THEMES = {
     },
     "matrix": {
         "label": "Matrix",
+        "is_light": False,
         "bg_primary": "#000000", "bg_secondary": "#020402", "bg_surface": "#050a05",
         "bg_surface2": "#0a140a", "bg_hover": "#0f1c0f", "bg_active": "#142614",
         "accent": "#00ff41", "accent_hover": "#00cc34", "accent_soft": "rgba(0, 255, 65, 0.12)",
@@ -219,6 +230,7 @@ THEMES = {
     },
     "conductor": {
         "label": "Mesa do Maestro",
+        "is_light": False,
         "bg_primary": "#0c0c0c", "bg_secondary": "#111111", "bg_surface": "#141414",
         "bg_surface2": "#1e1e1e", "bg_hover": "#1e1e1e", "bg_active": "#242424",
         "accent": "#c9a84c", "accent_hover": "#b8944a", "accent_soft": "rgba(201, 168, 76, 0.14)",

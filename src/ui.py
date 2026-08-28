@@ -28,7 +28,7 @@ icon-bearing widget gets rebuilt when the user switches theme.
 import os
 
 from PySide6.QtCore import Qt, QSize, QUrl, QPoint
-from PySide6.QtGui import QAction, QDesktopServices, QPixmap
+from PySide6.QtGui import QAction, QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
@@ -1336,24 +1336,34 @@ class MainWindow(QMainWindow):
         set_app_theme(QApplication.instance(), theme_name)
         self._refresh_icon_theme(theme_name)
 
-    def _load_logo_pixmap(self, size: int) -> QPixmap:
+    def _load_logo_pixmap(self, size: int, invert: bool = False) -> QPixmap:
         """The Allora mark, bundled as a fixed PNG asset (assets/logo.png)
         rather than drawn from icons.py's theme-recolorable SVG set - this
-        one is a fixed piece of brand art, not a stroke icon, so it doesn't
-        adapt per theme like the rest of the UI's icons do. Rendered once
-        at 2x and given a device pixel ratio of 2 to stay crisp on
-        high-DPI displays, matching make_icon()'s convention."""
+        one is a fixed piece of brand art, not a stroke icon, so it can't
+        be recolored by the QSS stylesheet the way the rest of the UI's
+        icons are. Instead, on a light theme (see THEMES[...]["is_light"]
+        in theme.py) the whole image's RGB is inverted - the dark tile
+        becomes light and the light mark becomes dark - so the badge still
+        reads correctly against a light header instead of looking like a
+        leftover dark-mode asset. Rendered once at 2x and given a device
+        pixel ratio of 2 to stay crisp on high-DPI displays, matching
+        make_icon()'s convention."""
         scale = 2
         side = size * scale
-        source = QPixmap(resource_path("assets/logo.png"))
-        if source.isNull():
+        image = QImage(resource_path("assets/logo.png"))
+        if image.isNull():
             # Fallback so a missing/misplaced asset never crashes the app -
             # just leaves the header logo blank instead.
             pixmap = QPixmap(side, side)
             pixmap.fill(Qt.transparent)
             pixmap.setDevicePixelRatio(float(scale))
             return pixmap
-        pixmap = source.scaled(side, side, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation)
+        if invert:
+            image = image.convertToFormat(QImage.Format_ARGB32)
+            image.invertPixels(QImage.InvertRgb)
+        pixmap = QPixmap.fromImage(image).scaled(
+            side, side, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation
+        )
         pixmap.setDevicePixelRatio(float(scale))
         return pixmap
 
@@ -1363,7 +1373,7 @@ class MainWindow(QMainWindow):
         theme change recolors the whole UI, not just backgrounds/text."""
         colors = theme_colors(theme_name)
 
-        self.logo_label.setPixmap(self._load_logo_pixmap(34))
+        self.logo_label.setPixmap(self._load_logo_pixmap(34, invert=colors.get("is_light", False)))
 
         for item in self.nav_items:
             item.set_theme(theme_name)
