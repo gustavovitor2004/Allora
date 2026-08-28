@@ -355,6 +355,15 @@ def build_stylesheet(theme_name: str) -> str:
     QMainWindow {{
         background-color: {c['bg_primary']};
     }}
+    /* Plain QLabels (header logo, title, row text) must not paint their
+       own bg_primary box - that only matches the main content area, not
+       whatever surface (Header's bg_secondary, a Card's bg_surface, ...)
+       they actually sit on. Every #Name-specific label rule below (Pill,
+       Thumb, ErrorLabel, ...) still wins over this via ID selector
+       specificity, so this only clears the plain, unstyled ones. */
+    QLabel {{
+        background-color: transparent;
+    }}
 
     /* --- Header ------------------------------------------------------- */
     QFrame#Header {{
