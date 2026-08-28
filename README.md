@@ -1,4 +1,4 @@
-# 🟥 MasterApp
+# 🟥 Allora
 
 Aplicativo pessoal de desktop para baixar vídeos do YouTube, Instagram,
 Twitter/X, TikTok, Reddit, Facebook e qualquer outra plataforma suportada
@@ -12,14 +12,14 @@ conversão de documentos.
 - **Nenhum outro requisito** se você usar o `.exe` standalone (veja
   "Versão .exe" abaixo) — o Python já vem embutido nele.
 - Python 3.10 ou superior, com **"Add python.exe to PATH"** marcado na
-  instalação, **apenas** se for usar a versão via `MasterApp.bat` (código-
+  instalação, **apenas** se for usar a versão via `Allora.bat` (código-
   fonte) em vez do `.exe`.
 
 ## Versão .exe (recomendado — não precisa instalar Python)
 
-Baixe `MasterApp-exe-standalone.zip` da [página de
-Releases](https://github.com/gustavovitor2004/MasterApp/releases), extraia
-em qualquer pasta e dê duplo clique em `MasterApp.exe` dentro dela. Pronto —
+Baixe `Allora-exe-standalone.zip` da [página de
+Releases](https://github.com/gustavovitor2004/Allora/releases), extraia
+em qualquer pasta e dê duplo clique em `Allora.exe` dentro dela. Pronto —
 não precisa instalar Python, nem rodar nenhum instalador. ffmpeg e Poppler já
 vêm dentro da pasta `tools\`, junto com o `.exe`.
 
@@ -28,9 +28,9 @@ o interpretador Python e todas as bibliotecas dentro do próprio `.exe`. Pra
 gerar um novo pacote depois de alterar o código, rode `build_exe.ps1` (veja
 "Gerando um pacote de release" abaixo).
 
-## Instalação e uso (a partir do código-fonte, com `MasterApp.bat`)
+## Instalação e uso (a partir do código-fonte, com `Allora.bat`)
 
-1. Dê **duplo clique em `MasterApp.bat`**, na raiz do projeto.
+1. Dê **duplo clique em `Allora.bat`**, na raiz do projeto.
    - **Primeira vez**: o script detecta que ainda falta instalar tudo,
      mostra o progresso na tela (bibliotecas Python, depois `ffmpeg` e
      `Poppler` se não estiverem já no seu sistema) e abre o programa
@@ -38,12 +38,12 @@ gerar um novo pacote depois de alterar o código, rode `build_exe.ps1` (veja
      internet. **Não pede permissão de administrador** — tudo é instalado
      na sua própria conta de usuário ou dentro da pasta do projeto.
    - **Próximas vezes**: o script detecta que já está tudo pronto (por um
-     arquivo marcador `.masterapp_installed`) e abre o programa
+     arquivo marcador `.allora_installed`) e abre o programa
      imediatamente, sem reinstalar nada.
 2. Pronto — não existe nenhum outro arquivo para abrir ou configurar.
 
 Se a instalação falhar em algum passo (ex: sem internet), o marcador **não**
-é criado, então da próxima vez que você abrir `MasterApp.bat` ele tenta
+é criado, então da próxima vez que você abrir `Allora.bat` ele tenta
 instalar tudo de novo do zero, em vez de abrir o programa quebrado.
 
 **Recomendado:** publique um `.zip` já com `tools/ffmpeg` e `tools/poppler`
@@ -54,7 +54,7 @@ ou com antivírus restritivo, esse download costuma falhar silenciosamente e
 o app abre sem ffmpeg (mensagem "ffmpeg não encontrado" ao converter vídeo).
 
 Se preferir do jeito simples mesmo assim, envie a pasta inteira (`src/`,
-`MasterApp.bat`, `tools_installer.ps1`, `requirements.txt`, `README.md`)
+`Allora.bat`, `tools_installer.ps1`, `requirements.txt`, `README.md`)
 compactada em `.zip` para outra pessoa — ela só precisa ter o Python
 instalado; nenhuma outra ferramenta (nem Git) é necessária de antemão, mas
 o ffmpeg/Poppler serão baixados na primeira execução em cada máquina.
@@ -70,24 +70,24 @@ o ffmpeg/Poppler serão baixados na primeira execução em cada máquina.
   instalado no `PATH`
 
 Nenhuma dessas ferramentas é registrada no `PATH` do Windows nem instalada
-para o sistema inteiro — o MasterApp já sabe procurar dentro de `tools\`
+para o sistema inteiro — o Allora já sabe procurar dentro de `tools\`
 automaticamente, então isso funciona sem pedir administrador.
 
 ### Gerando um pacote de release (com ffmpeg/Poppler já dentro)
 
 Para não depender do download automático em cada máquina, monte um `.zip`
 com `tools/ffmpeg` e `tools/poppler` já preenchidos (baixados uma vez aqui,
-via `MasterApp.bat` normalmente) e publique como **GitHub Release** — não
+via `Allora.bat` normalmente) e publique como **GitHub Release** — não
 como commit no repositório, porque o `ffmpeg.exe` sozinho tem ~140MB e o
 Git recusa arquivos acima de 100MB sem Git LFS. O pacote deve conter:
 
-- `src/`, `MasterApp.bat`, `Desinstalar_MasterApp.bat`, `tools_installer.ps1`,
+- `src/`, `Allora.bat`, `Desinstalar_Allora.bat`, `tools_installer.ps1`,
   `requirements.txt`, `README.md`
 - `tools/ffmpeg/ffmpeg.exe` e `tools/ffmpeg/ffprobe.exe` (**sem**
   `ffplay.exe` — o app não usa e ele sozinho tem ~140MB)
 - `tools/poppler/` completo (executáveis + DLLs)
 
-O `MasterApp.bat` já checa se `tools\ffmpeg\ffmpeg.exe` e
+O `Allora.bat` já checa se `tools\ffmpeg\ffmpeg.exe` e
 `tools\poppler\pdftoppm.exe` existem antes de tentar baixar — se já
 estiverem no pacote, ele pula direto para instalar os pacotes Python e
 abrir o app, sem precisar de internet para ffmpeg/Poppler.
@@ -95,15 +95,15 @@ abrir o app, sem precisar de internet para ffmpeg/Poppler.
 #### Pacote `.exe` standalone (sem Python)
 
 1. Rode `pip install -r requirements.txt` uma vez (para ter tudo disponível
-   localmente) e `.\MasterApp.bat` uma vez, se `tools\ffmpeg` e
+   localmente) e `.\Allora.bat` uma vez, se `tools\ffmpeg` e
    `tools\poppler` ainda não existirem, só para baixá-los.
-2. Rode `.\build_exe.ps1` — gera `dist\MasterApp\MasterApp.exe` (PyInstaller,
+2. Rode `.\build_exe.ps1` — gera `dist\Allora\Allora.exe` (PyInstaller,
    embute o interpretador Python e todas as bibliotecas).
 3. Copie `tools\ffmpeg` e `tools\poppler` para dentro de
-   `dist\MasterApp\tools\` (o `.exe` procura ali do mesmo jeito que o
-   `MasterApp.bat` procura na raiz do projeto).
-4. Compacte a pasta `dist\MasterApp\` inteira em `.zip` e publique como
-   asset da release — esse é o `MasterApp-exe-standalone.zip`.
+   `dist\Allora\tools\` (o `.exe` procura ali do mesmo jeito que o
+   `Allora.bat` procura na raiz do projeto).
+4. Compacte a pasta `dist\Allora\` inteira em `.zip` e publique como
+   asset da release — esse é o `Allora-exe-standalone.zip`.
 
 O `.exe` fica grande (~300MB compactado, ~700MB extraído) porque leva o
 Python e todas as bibliotecas (PySide6, OpenCV etc.) embutidos — é a troca
@@ -111,7 +111,7 @@ por não precisar de nenhuma instalação na máquina de quem for usar.
 
 ### Instalando manualmente (alternativa)
 
-Se preferir não usar `MasterApp.bat`, ou já tem `ffmpeg`/`Poppler`
+Se preferir não usar `Allora.bat`, ou já tem `ffmpeg`/`Poppler`
 instalados de outra forma:
 
 ```bash
@@ -135,22 +135,22 @@ localização do próprio projeto e à pasta pessoal do usuário, nunca
 
 ## Desinstalar
 
-Para remover completamente o que o `MasterApp.bat` instalou:
+Para remover completamente o que o `Allora.bat` instalou:
 
-1. Dê dois cliques em **`Desinstalar_MasterApp.bat`**, na raiz do projeto.
+1. Dê dois cliques em **`Desinstalar_Allora.bat`**, na raiz do projeto.
 2. Confirme a desinstalação digitando **S**.
 3. Aguarde a conclusão.
 
 **O que é removido:**
-- Todos os pacotes Python instalados pelo `MasterApp.bat` (`requirements.txt`)
+- Todos os pacotes Python instalados pelo `Allora.bat` (`requirements.txt`)
 - `ffmpeg` portátil (pasta `tools\ffmpeg`)
 - Poppler portátil (pasta `tools\poppler`)
-- Registro de instalação (`.masterapp_installed`)
+- Registro de instalação (`.allora_installed`)
 
 **O que NÃO é removido:**
 - O Python em si
 - Seus arquivos pessoais (vídeos baixados, documentos convertidos, etc.)
-- A pasta do MasterApp — a menos que você responda **S** na pergunta final
+- A pasta do Allora — a menos que você responda **S** na pergunta final
   opcional, que apaga a pasta inteira (código-fonte incluído). Essa etapa é
   irreversível e só acontece se você confirmar explicitamente.
 
@@ -158,7 +158,7 @@ Assim como o instalador, o desinstalador **não pede permissão de
 administrador** — como nada é registrado no `PATH` do sistema, não há nada
 em nível de sistema para desfazer.
 
-Depois de desinstalar, rodar `MasterApp.bat` novamente reinicia o processo
+Depois de desinstalar, rodar `Allora.bat` novamente reinicia o processo
 de instalação do zero, como se fosse a primeira vez (o marcador foi
 apagado).
 
@@ -298,7 +298,7 @@ Saída padrão: `~/Documents/Convertidos`.
 
 ### Dependências extras desta aba
 
-`MasterApp.bat` já baixa o **Poppler** automaticamente (veja
+`Allora.bat` já baixa o **Poppler** automaticamente (veja
 [Instalação e uso](#instalação-e-uso) acima), necessário para as operações
 com PDF: converter PDF → imagem e mesclar PDF. Sem ele, essas operações
 específicas mostram uma mensagem de erro clara em vez de travar o app.
@@ -311,7 +311,7 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 ## Estrutura de arquivos
 
 ```
-/MasterApp
+/Allora
 ├── src/                      # todo o código-fonte Python
 │   ├── main.py               # Ponto de entrada — inicia a interface gráfica
 │   ├── startup_check.py      # Confere pacotes/ferramentas ausentes ao iniciar
@@ -329,12 +329,12 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 │       │                     # pdf2image, pdf2docx, pdfplumber, docx2pdf, pypdf)
 │       ├── workers.py        # QThread workers de digitalização e conversão
 │       └── tab_documentos.py # Widget da aba (sub-abas Digitalizar/Converter)
-├── build_exe.ps1              # Gera o .exe standalone via PyInstaller (dist/MasterApp/)
-├── MasterApp.bat             # Único arquivo que o usuário abre - instala na 1ª vez, inicia sempre
-├── Desinstalar_MasterApp.bat # Remove pacotes Python, tools/ffmpeg, tools/poppler e o marcador
-├── tools_installer.ps1       # Baixa ffmpeg/Poppler portáteis, chamado pelo MasterApp.bat
+├── build_exe.ps1              # Gera o .exe standalone via PyInstaller (dist/Allora/)
+├── Allora.bat             # Único arquivo que o usuário abre - instala na 1ª vez, inicia sempre
+├── Desinstalar_Allora.bat # Remove pacotes Python, tools/ffmpeg, tools/poppler e o marcador
+├── tools_installer.ps1       # Baixa ffmpeg/Poppler portáteis, chamado pelo Allora.bat
 ├── tools/                    # Criado na 1ª execução: ffmpeg/Poppler portáteis (git-ignored)
-├── .masterapp_installed      # Marcador criado só após instalação 100% bem-sucedida (git-ignored)
+├── .allora_installed      # Marcador criado só após instalação 100% bem-sucedida (git-ignored)
 ├── config.json                # Criado automaticamente na primeira execução (git-ignored)
 ├── requirements.txt
 └── README.md
@@ -361,7 +361,7 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 - **Mesclagem**: quando a qualidade selecionada exige stream de vídeo e
   áudio separados (comum a partir de 720p/1080p no YouTube), o `yt-dlp`
   usa o ffmpeg para mesclá-los automaticamente em `.mp4`.
-- **Instalação sem administrador**: `MasterApp.bat` nunca pede elevação.
+- **Instalação sem administrador**: `Allora.bat` nunca pede elevação.
   `pip` instala na conta do usuário automaticamente quando o Python é
   compartilhado entre contas; `ffmpeg`/Poppler são baixados como binários
   portáteis para `tools/` em vez de registrados no `PATH` do sistema —
@@ -372,8 +372,8 @@ nenhum dos dois, o app mostra um erro claro em vez de travar.
 
 | Problema | Causa provável | Solução |
 |---|---|---|
-| `MasterApp.bat` trava em "Instalando pacotes Python" | Sem conexão com a internet | Verifique a internet e rode `MasterApp.bat` de novo — o marcador só é criado após sucesso total, então ele tenta tudo de novo do zero |
-| "ffmpeg não encontrado" | ffmpeg não está instalado ou não está no PATH nem em `tools\ffmpeg` | Apague `.masterapp_installed` e rode `MasterApp.bat` de novo, ou instale manualmente (veja acima) |
+| `Allora.bat` trava em "Instalando pacotes Python" | Sem conexão com a internet | Verifique a internet e rode `Allora.bat` de novo — o marcador só é criado após sucesso total, então ele tenta tudo de novo do zero |
+| "ffmpeg não encontrado" | ffmpeg não está instalado ou não está no PATH nem em `tools\ffmpeg` | Apague `.allora_installed` e rode `Allora.bat` de novo, ou instale manualmente (veja acima) |
 | Item fica "Indisponível" | Vídeo privado, removido ou exige login | Nada a fazer no app — o conteúdo não está acessível publicamente |
 | Download trava em 0% | Link inválido ou plataforma não suportada pelo yt-dlp | Verifique a URL; consulte a lista de extratores do yt-dlp |
 | Qualidade baixada é menor que a selecionada | A plataforma não oferece aquele stream para este vídeo | Comportamento esperado — o app mostra a qualidade real ao lado do título |
