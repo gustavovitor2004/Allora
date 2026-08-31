@@ -28,12 +28,12 @@ icon-bearing widget gets rebuilt when the user switches theme.
 import os
 
 from PySide6.QtCore import Qt, QSize, QUrl, QPoint
-from PySide6.QtGui import QAction, QDesktopServices, QImage, QPixmap
+from PySide6.QtGui import QDesktopServices, QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QStackedWidget, QMenu,
+    QMessageBox, QFrame, QStackedWidget,
 )
 
 from downloader import DownloadItem, DownloadManager
@@ -41,9 +41,12 @@ from converter import (
     ConversionItem, ConversionManager, CATEGORY_LABELS, available_targets,
 )
 from documentos.tab_documentos import DocumentosTab
-from icons import make_icon, make_badge
+from icons import make_icon
 from settings import Settings, QUALITY_CHOICES, save_settings
-from theme import apply_theme as set_app_theme, repolish, theme_colors, theme_names
+from theme import (
+    apply_theme as set_app_theme, repolish, theme_colors,
+    THEME_VARIANTS, base_theme_names, theme_key_to_base_and_mode, resolve_theme_variant,
+)
 from updater import UpdateCheckWorker
 from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path
 from version import APP_VERSION
@@ -531,33 +534,124 @@ class ConversionItemWidget(QFrame):
 
 
 class SettingsDialog(QDialog):
+    """Frameless to match MainWindow (see Header) - its own title bar reuses
+    the Header widget/objectNames so it repaints for free whenever the
+    global stylesheet changes, which matters here specifically because
+    changing the theme picker below live-previews the theme app-wide
+    (see _apply_theme_preview()) while this dialog is still open."""
+
     def __init__(self, settings: Settings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Configurações")
-        self.setMinimumWidth(460)
+        self._main_window = parent
         self.settings = settings
+        self._original_theme = settings.theme
+        self._resolved_theme = settings.theme
 
-        layout = QVBoxLayout(self)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
+        self.setWindowTitle("Configurações")
+        self.setMinimumWidth(480)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_title_bar())
+
+        body = QWidget()
+        body_layout = QVBoxLayout(body)
+        body_layout.setContentsMargins(16, 16, 16, 16)
+        body_layout.setSpacing(24)
+
+        body_layout.addLayout(self._build_downloads_group(settings))
+        body_layout.addLayout(self._build_appearance_group(settings))
+
+        self.ffmpeg_status_label = QLabel()
+        body_layout.addWidget(self.ffmpeg_status_label)
+        self._refresh_ffmpeg_status()
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        cancel_btn = QPushButton("Cancelar")
+        cancel_btn.setObjectName("Ghost")
+        cancel_btn.clicked.connect(self.reject)
+        save_btn = QPushButton("Salvar")
+        save_btn.setObjectName("Primary")
+        save_btn.clicked.connect(self.accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        body_layout.addLayout(btn_row)
+
+        outer.addWidget(body)
+
+    # ------------------------------------------------------------------
+    # Title bar - a slimmed-down twin of MainWindow's Header: draggable,
+    # themed, but close-only (a settings dialog has no minimize/maximize).
+    # ------------------------------------------------------------------
+
+    def _build_title_bar(self) -> QFrame:
+        bar = Header(lambda: None)
+        bar.setObjectName("Header")
+        bar.setFixedHeight(60)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(20, 0, 16, 0)
+        layout.setSpacing(12)
+
+        title = QLabel("Configurações")
+        title.setObjectName("HeaderTitle")
+        layout.addWidget(title)
+        layout.addStretch(1)
+
+        self._close_btn = QPushButton()
+        self._close_btn.setObjectName("WinBtn")
+        self._close_btn.setProperty("kind", "close")
+        self._close_btn.setFixedSize(32, 28)
+        self._close_btn.setIconSize(QSize(12, 12))
+        self._close_btn.setToolTip("Fechar")
+        self._close_btn.clicked.connect(self.reject)
+        layout.addWidget(self._close_btn)
+
+        return bar
+
+    # ------------------------------------------------------------------
+    # Group builders
+    # ------------------------------------------------------------------
+
+    def _group_header(self, text: str) -> QVBoxLayout:
+        col = QVBoxLayout()
+        col.setSpacing(8)
+        label = QLabel(text)
+        label.setObjectName("SectionLabel")
+        col.addWidget(label)
+        divider = QFrame()
+        divider.setObjectName("Divider")
+        divider.setFixedHeight(1)
+        col.addWidget(divider)
+        return col
+
+    def _build_downloads_group(self, settings: Settings) -> QVBoxLayout:
+        col = self._group_header("DOWNLOADS")
+
         grid = QGridLayout()
-        grid.setVerticalSpacing(10)
-        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(16)
         row = 0
 
         grid.addWidget(QLabel("Pasta de destino:"), row, 0)
         self.folder_edit = QLineEdit(settings.output_dir)
         self.folder_edit.setReadOnly(True)
+        self.folder_edit.setMinimumHeight(34)
         grid.addWidget(self.folder_edit, row, 1)
-        browse_btn = QPushButton(" Escolher")
-        browse_btn.setIcon(make_icon("folder", theme_colors(settings.theme)["text_primary"], size=15))
-        browse_btn.setObjectName("Secondary")
-        browse_btn.clicked.connect(self._choose_folder)
-        grid.addWidget(browse_btn, row, 2)
+        self._browse_btn = QPushButton(" Escolher")
+        self._browse_btn.setObjectName("Secondary")
+        self._browse_btn.setMinimumHeight(34)
+        self._browse_btn.clicked.connect(self._choose_folder)
+        grid.addWidget(self._browse_btn, row, 2)
         row += 1
 
         grid.addWidget(QLabel("Qualidade padrão:"), row, 0)
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(QUALITY_CHOICES)
         self.quality_combo.setCurrentText(settings.default_quality)
+        self.quality_combo.setMinimumHeight(34)
         grid.addWidget(self.quality_combo, row, 1, 1, 2)
         row += 1
 
@@ -565,17 +659,8 @@ class SettingsDialog(QDialog):
         self.max_spin = QSpinBox()
         self.max_spin.setRange(1, 3)
         self.max_spin.setValue(settings.max_simultaneous)
+        self.max_spin.setMinimumHeight(34)
         grid.addWidget(self.max_spin, row, 1, 1, 2)
-        row += 1
-
-        grid.addWidget(QLabel("Tema:"), row, 0)
-        self.theme_combo = QComboBox()
-        for name, label in theme_names():
-            self.theme_combo.addItem(label, name)
-        current_index = self.theme_combo.findData(settings.theme)
-        if current_index >= 0:
-            self.theme_combo.setCurrentIndex(current_index)
-        grid.addWidget(self.theme_combo, row, 1, 1, 2)
         row += 1
 
         self.ffmpeg_check = QCheckBox("Usar ffmpeg para mesclar áudio/vídeo")
@@ -596,32 +681,103 @@ class SettingsDialog(QDialog):
         grid.addWidget(QLabel("Caminho customizado do ffmpeg:"), row, 0)
         self.ffmpeg_path_edit = QLineEdit(settings.ffmpeg_path)
         self.ffmpeg_path_edit.setPlaceholderText("Deixe em branco para usar o PATH do sistema")
+        self.ffmpeg_path_edit.setMinimumHeight(34)
         grid.addWidget(self.ffmpeg_path_edit, row, 1)
-        ffmpeg_browse_btn = QPushButton()
-        ffmpeg_browse_btn.setIcon(make_icon("folder", theme_colors(settings.theme)["text_primary"], size=15))
-        ffmpeg_browse_btn.setObjectName("Secondary")
-        ffmpeg_browse_btn.setFixedWidth(40)
-        ffmpeg_browse_btn.clicked.connect(self._choose_ffmpeg)
-        grid.addWidget(ffmpeg_browse_btn, row, 2)
+        self._ffmpeg_browse_btn = QPushButton()
+        self._ffmpeg_browse_btn.setObjectName("Secondary")
+        self._ffmpeg_browse_btn.setFixedWidth(40)
+        self._ffmpeg_browse_btn.setMinimumHeight(34)
+        self._ffmpeg_browse_btn.clicked.connect(self._choose_ffmpeg)
+        grid.addWidget(self._ffmpeg_browse_btn, row, 2)
         row += 1
 
-        layout.addLayout(grid)
+        col.addLayout(grid)
+        self._refresh_field_icons()
+        return col
 
-        self.ffmpeg_status_label = QLabel()
-        layout.addWidget(self.ffmpeg_status_label)
-        self._refresh_ffmpeg_status()
+    def _build_appearance_group(self, settings: Settings) -> QVBoxLayout:
+        col = self._group_header("APARÊNCIA")
 
-        btn_row = QHBoxLayout()
-        btn_row.addStretch(1)
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setObjectName("Ghost")
-        cancel_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Salvar")
-        save_btn.setObjectName("Primary")
-        save_btn.clicked.connect(self.accept)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addWidget(save_btn)
-        layout.addLayout(btn_row)
+        grid = QGridLayout()
+        grid.setVerticalSpacing(8)
+        grid.setHorizontalSpacing(16)
+
+        grid.addWidget(QLabel("Tema:"), 0, 0)
+        self.theme_base_combo = QComboBox()
+        self.theme_base_combo.addItems(base_theme_names())
+        base_label, mode = theme_key_to_base_and_mode(settings.theme)
+        self._theme_mode = mode
+        idx = self.theme_base_combo.findText(base_label)
+        if idx >= 0:
+            self.theme_base_combo.setCurrentIndex(idx)
+        self.theme_base_combo.setMinimumHeight(34)
+        self.theme_base_combo.currentTextChanged.connect(self._on_base_theme_changed)
+        grid.addWidget(self.theme_base_combo, 0, 1, 1, 2)
+
+        self.theme_mode_btn = QPushButton()
+        self.theme_mode_btn.setObjectName("Secondary")
+        self.theme_mode_btn.setMinimumHeight(34)
+        self.theme_mode_btn.clicked.connect(self._toggle_theme_mode)
+        grid.addWidget(self.theme_mode_btn, 1, 1, 1, 2)
+
+        col.addLayout(grid)
+        self._refresh_theme_mode_button()
+        return col
+
+    # ------------------------------------------------------------------
+    # Theme live preview - selecting a base theme or toggling light/dark
+    # applies it to the whole running app immediately (via the parent
+    # MainWindow's own apply_theme(), the same one theme changes always
+    # went through), but nothing is written to config.json until Salvar;
+    # Cancelar/closing reverts back to whatever theme was active when the
+    # dialog opened. See reject() below.
+    # ------------------------------------------------------------------
+
+    def _on_base_theme_changed(self, base_label: str):
+        variants = THEME_VARIANTS.get(base_label, {})
+        if not variants.get(self._theme_mode):
+            self._theme_mode = "dark"
+        self._refresh_theme_mode_button()
+        self._apply_theme_preview()
+
+    def _toggle_theme_mode(self):
+        self._theme_mode = "light" if self._theme_mode == "dark" else "dark"
+        self._refresh_theme_mode_button()
+        self._apply_theme_preview()
+
+    def _refresh_theme_mode_button(self):
+        base_label = self.theme_base_combo.currentText()
+        variants = THEME_VARIANTS.get(base_label, {})
+        has_both = variants.get("dark") and variants.get("light")
+        if not has_both:
+            self.theme_mode_btn.setText("Apenas um modo disponível")
+            self.theme_mode_btn.setEnabled(False)
+        else:
+            self.theme_mode_btn.setEnabled(True)
+            if self._theme_mode == "dark":
+                self.theme_mode_btn.setText("☀ Mudar para Claro")
+            else:
+                self.theme_mode_btn.setText("🌙 Mudar para Escuro")
+
+    def _apply_theme_preview(self):
+        base_label = self.theme_base_combo.currentText()
+        self._resolved_theme = resolve_theme_variant(base_label, self._theme_mode)
+        if self._main_window is not None and hasattr(self._main_window, "apply_theme"):
+            self._main_window.apply_theme(self._resolved_theme)
+        self._refresh_field_icons()
+
+    def _refresh_field_icons(self):
+        """Icons living inside this dialog (browse buttons, close button)
+        are baked bitmaps like everywhere else in the app (see icons.py) -
+        they need their own refresh on every theme change, previewed or
+        not, the same way MainWindow._refresh_icon_theme() does for the
+        rest of the UI."""
+        colors = theme_colors(self._resolved_theme)
+        self._browse_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
+        self._ffmpeg_browse_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
+        self._close_btn.setIcon(make_icon("win-close", colors["text_secondary"], size=12))
+
+    # ------------------------------------------------------------------
 
     def _refresh_ffmpeg_status(self):
         path = find_ffmpeg(self.ffmpeg_path_edit.text().strip())
@@ -646,11 +802,20 @@ class SettingsDialog(QDialog):
             self.ffmpeg_path_edit.setText(path)
             self._refresh_ffmpeg_status()
 
+    def reject(self):
+        # Cancelar, the titlebar close button, and Esc all funnel through
+        # here - undo the live preview so an aborted theme change never
+        # sticks after the dialog closes without Salvar.
+        if self._resolved_theme != self._original_theme:
+            if self._main_window is not None and hasattr(self._main_window, "apply_theme"):
+                self._main_window.apply_theme(self._original_theme)
+        super().reject()
+
     def apply_to(self, settings: Settings):
         settings.output_dir = self.folder_edit.text().strip() or settings.output_dir
         settings.default_quality = self.quality_combo.currentText()
         settings.max_simultaneous = self.max_spin.value()
-        settings.theme = self.theme_combo.currentData()
+        settings.theme = self._resolved_theme
         settings.use_ffmpeg_merge = self.ffmpeg_check.isChecked()
         settings.save_thumbnail = self.thumb_check.isChecked()
         settings.save_metadata = self.meta_check.isChecked()
@@ -819,13 +984,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(title)
         layout.addStretch(1)
 
-        self.theme_btn = QPushButton(" Tema")
-        self.theme_btn.setObjectName("Ghost")
-        self.theme_btn.setIconSize(QSize(15, 15))
-        self.theme_btn.clicked.connect(self._open_theme_menu)
-        self._icon_buttons.append((self.theme_btn, "palette", "text_secondary"))
-        layout.addWidget(self.theme_btn)
-
         self.settings_btn = QPushButton(" Configurações")
         self.settings_btn.setObjectName("Secondary")
         self.settings_btn.setIconSize(QSize(15, 15))
@@ -901,16 +1059,6 @@ class MainWindow(QMainWindow):
         color = theme_colors(self.settings.theme)["text_secondary"]
         self.maximize_btn.setIcon(make_icon(name, color, size=12))
         self.maximize_btn.setToolTip("Restaurar" if self._is_pseudo_maximized else "Maximizar")
-
-    def _open_theme_menu(self):
-        menu = QMenu(self)
-        for name, label in theme_names():
-            action = QAction(label, self)
-            action.setCheckable(True)
-            action.setChecked(name == self.settings.theme)
-            action.triggered.connect(lambda checked=False, n=name: self.set_theme(n))
-            menu.addAction(action)
-        menu.exec(self.theme_btn.mapToGlobal(self.theme_btn.rect().bottomLeft()))
 
     def _build_queue_footer(self, start_text, start_icon, on_start, on_pause, on_clear):
         """Shared skeleton for the Downloads/Converter tabs' bottom control
@@ -1260,13 +1408,14 @@ class MainWindow(QMainWindow):
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
         if dialog.exec() == QDialog.Accepted:
-            old_theme = self.settings.theme
             dialog.apply_to(self.settings)
             save_settings(self.settings)
             self.folder_label.setText(self.settings.output_dir)
             self.conv_folder_label.setText(self.settings.output_dir)
-            if self.settings.theme != old_theme:
-                self.apply_theme(self.settings.theme)
+            # Already showing live (see SettingsDialog._apply_theme_preview) -
+            # re-applying here is just cheap insurance that the persisted
+            # settings.theme and the on-screen theme can never drift apart.
+            self.apply_theme(self.settings.theme)
 
     def show_about(self):
         QMessageBox.information(

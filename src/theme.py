@@ -272,6 +272,58 @@ def theme_names() -> list:
     return [(name, t["label"]) for name, t in THEMES.items()]
 
 
+# Several themes ship a matching light/dark pair under separate THEMES keys
+# (e.g. "classic_dark"/"classic_light"). The Settings window's theme picker
+# shows only these base names - one entry per visual family - paired with
+# a light/dark toggle button, instead of listing every THEMES key as its
+# own row. Themes with only one mode map that side to None.
+THEME_VARIANTS = {
+    "Clássico": {"dark": "classic_dark", "light": "classic_light"},
+    "Terminal Utility": {"dark": "terminal", "light": None},
+    "Paper & Ink": {"dark": "paper_dark", "light": "paper_light"},
+    "Poster Maximalista": {"dark": "poster_dark", "light": "poster_light"},
+    "Console de Vidro": {"dark": "glass", "light": None},
+    "Pôr do Sol": {"dark": "sunset", "light": None},
+    "Precisão Gelo": {"dark": "ice", "light": None},
+    "Matrix": {"dark": "matrix", "light": None},
+    "Mesa do Maestro": {"dark": "conductor", "light": None},
+}
+
+
+def base_theme_names() -> list:
+    """Ordered base-theme labels for the Settings window's theme picker -
+    one per visual family, no separate light/dark duplicates."""
+    return list(THEME_VARIANTS.keys())
+
+
+def theme_key_to_base_and_mode(theme_key: str) -> tuple:
+    """Reverse-lookup: given an actual THEMES key (e.g. "classic_light"),
+    return the (base_label, mode) pair the Settings window's picker and
+    light/dark toggle should show as selected. Falls back to the first
+    base theme's dark mode if the key isn't found in THEME_VARIANTS at all
+    (shouldn't happen for any key that's passed through
+    normalize_theme_name() first, but this keeps the picker from crashing
+    on a stale or hand-edited config.json)."""
+    for base, variants in THEME_VARIANTS.items():
+        if variants["dark"] == theme_key:
+            return base, "dark"
+        if variants["light"] == theme_key:
+            return base, "light"
+    fallback_base = base_theme_names()[0]
+    return fallback_base, "dark"
+
+
+def resolve_theme_variant(base_label: str, mode: str) -> str:
+    """THEME_VARIANTS[base_label][mode], falling back to that base theme's
+    dark variant if the requested mode is None for it (e.g. the caller
+    asks for "light" on a theme that only ships one mode)."""
+    variants = THEME_VARIANTS.get(base_label, THEME_VARIANTS[base_theme_names()[0]])
+    key = variants.get(mode)
+    if key is None:
+        key = variants["dark"]
+    return key
+
+
 def theme_colors(theme_name: str) -> dict:
     """Expose the raw theme dict so non-stylesheet code (icons drawn via
     QPainter/QSvgRenderer, which don't go through QSS at all) can pick
@@ -381,6 +433,10 @@ def build_stylesheet(theme_name: str) -> str:
         font-weight: 700;
         letter-spacing: {tracking}px;
         color: {c['text_secondary']};
+    }}
+    QFrame#Divider {{
+        background-color: {c['border']};
+        border: none;
     }}
 
     /* --- Custom title-bar window controls (minimize/maximize/close) ------ */
