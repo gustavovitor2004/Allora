@@ -849,10 +849,17 @@ class UrlInput(QPlainTextEdit):
         control's HWND, which is what the shell actually checks before
         drawing its emoji/touch-keyboard flyout icon over a focused text
         field - Qt's own input-method flag (above) doesn't touch this.
-        Trade-off: this also turns off IME composition for this field, so
-        typing Chinese/Japanese/Korean directly into it won't work (pasting
-        already-typed text is unaffected). Windows-only and best-effort -
-        wrapped so any failure just leaves the field working normally."""
+        Uses ImmAssociateContextEx with IACE_IGNORENOCONTEXT rather than
+        plain ImmAssociateContext(hwnd, None): the plain call only detaches
+        once and Windows can silently reattach a fresh default IME context
+        the next time the field regains focus, so the icon comes back;
+        IACE_IGNORENOCONTEXT tells the system to remember "no IME" for this
+        HWND persistently. Falls back to the older call on Windows builds
+        where ImmAssociateContextEx isn't available. Trade-off: this also
+        turns off IME composition for this field, so typing Chinese/
+        Japanese/Korean directly into it won't work (pasting already-typed
+        text is unaffected). Windows-only and best-effort - wrapped so any
+        failure just leaves the field working normally."""
         if os.name != "nt":
             return
         try:
@@ -860,7 +867,13 @@ class UrlInput(QPlainTextEdit):
 
             self.setAttribute(Qt.WA_NativeWindow, True)
             hwnd = int(self.winId())
-            ctypes.windll.imm32.ImmAssociateContext(hwnd, None)
+            IACE_IGNORENOCONTEXT = 0x0004
+            try:
+                ok = ctypes.windll.imm32.ImmAssociateContextEx(hwnd, None, IACE_IGNORENOCONTEXT)
+                if not ok:
+                    raise OSError("ImmAssociateContextEx returned FALSE")
+            except (AttributeError, OSError):
+                ctypes.windll.imm32.ImmAssociateContext(hwnd, None)
         except Exception:
             pass
 
@@ -869,6 +882,13 @@ class UrlInput(QPlainTextEdit):
             self._on_submit()
             return
         super().keyPressEvent(event)
+
+    def focusInEvent(self, event):
+        # Belt-and-suspenders: re-detach on every focus in case
+        # IACE_IGNORENOCONTEXT isn't fully honored on this Windows build
+        # and the shell reattaches a default IME context anyway.
+        self._detach_windows_ime()
+        super().focusInEvent(event)
 
 
 class MainWindow(QMainWindow):
