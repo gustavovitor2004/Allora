@@ -566,6 +566,9 @@ class SettingsDialog(QDialog):
         body_layout.addWidget(tabs)
 
         btn_row = QHBoxLayout()
+        version_label = QLabel(f"Allora {APP_VERSION}")
+        version_label.setObjectName("Dim")
+        btn_row.addWidget(version_label)
         btn_row.addStretch(1)
         cancel_btn = QPushButton("Cancelar")
         cancel_btn.setObjectName("Ghost")
