@@ -6,10 +6,11 @@ ffmpeg the download side of this app already requires). Mirrors the
 architecture of downloader.py: a Qt-signal-emitting manager that runs a
 small pool of worker threads, so conversion never blocks the GUI.
 
-Only same-category conversions are offered (video->video, audio->audio,
-image->image) - that matches "give me other formats of this file" rather
-than trying to guess extraction intents (e.g. video->mp3), which the
-Downloads tab already covers for online videos.
+Same-category conversions (video->video, audio->audio, image->image) match
+"give me other formats of this file". Video->audio is the one deliberate
+cross-category exception: extracting just the audio track from a video the
+user already has locally is a distinct, common need from the Downloads
+tab's "audio only" option, which only applies to a fresh online download.
 """
 
 import itertools
@@ -75,7 +76,10 @@ def detect_format(file_path: str):
 def available_targets(category, current_ext):
     if not category:
         return []
-    return [f for f in CATEGORY_FORMATS[category] if f != current_ext]
+    targets = [f for f in CATEGORY_FORMATS[category] if f != current_ext]
+    if category == "video":
+        targets += [f for f in AUDIO_FORMATS if f != current_ext]
+    return targets
 
 
 class _CancelledConversion(Exception):
@@ -293,7 +297,12 @@ class ConversionManager(QObject):
         output_path = unique_path(self.settings.output_dir, base_name, item.target_ext)
 
         cmd = [ffmpeg_path, "-y", "-i", item.source_path]
-        if item.category == "video":
+        if item.category == "video" and item.target_ext in AUDIO_FORMATS:
+            # Audio extraction from a video source: drop the video stream
+            # entirely (-vn) rather than transcoding it, and use the same
+            # audio codec args as a normal audio->audio conversion.
+            cmd += ["-vn"] + AUDIO_CODEC_ARGS.get(item.target_ext, [])
+        elif item.category == "video":
             cmd += VIDEO_CODEC_ARGS.get(item.target_ext, [])
         elif item.category == "audio":
             cmd += AUDIO_CODEC_ARGS.get(item.target_ext, [])
