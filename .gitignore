@@ -3,3 +3,6 @@ __pycache__/
 config.json
 *.info.json
 tools/
+build/
+dist/
+*.spec
