@@ -101,11 +101,20 @@ def make_row_action_button(on_click, theme_name: str = "classic_dark") -> QPushB
 
 
 def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark") -> None:
+    # A downloading/converting row calls this on every progress refresh
+    # (several times a second, for as long as a long download runs) even
+    # though the icon itself hasn't changed - re-rendering the same SVG to
+    # a fresh QIcon every time is pure waste on the GUI thread. Skip the
+    # rebuild when this exact (icon, theme) pairing is already showing.
+    cache_key = (name, theme_name)
+    if btn.property("_iconCacheKey") == cache_key:
+        return
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
     btn.setToolTip(
         {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover", "copy": "Copiar link"}.get(name, "")
     )
+    btn.setProperty("_iconCacheKey", cache_key)
 
 
 class Header(QFrame):
