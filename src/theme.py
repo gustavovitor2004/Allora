@@ -517,6 +517,25 @@ def build_stylesheet(theme_name: str) -> str:
     QCheckBox {{
         color: {c['text_primary']};
     }}
+    QCheckBox::indicator, QRadioButton::indicator {{
+        width: 15px;
+        height: 15px;
+        border: {bw}px solid {c['border_strong']};
+        background-color: {c['bg_surface']};
+    }}
+    QRadioButton {{
+        color: {c['text_primary']};
+    }}
+    QRadioButton::indicator {{
+        border-radius: 8px;
+    }}
+    QCheckBox::indicator:hover, QRadioButton::indicator:hover {{
+        border-color: {c['accent']};
+    }}
+    QCheckBox::indicator:checked, QRadioButton::indicator:checked {{
+        background-color: {c['accent']};
+        border-color: {c['accent']};
+    }}
 
     /* --- Buttons: 4 distinct variants ------------------------------------ */
     QPushButton {{
