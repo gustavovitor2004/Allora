@@ -249,15 +249,45 @@ def _pdf_to_images(path: str, target_ext: str, output_dir: str, progress_cb=None
 
 
 def _pdf_to_docx(path: str, output_dir: str) -> str:
+    from concurrent.futures import ThreadPoolExecutor
+    from concurrent.futures import TimeoutError as FutureTimeoutError
+
     from pdf2docx import Converter
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
     out_path = unique_path(output_dir, base, "docx")
-    converter = Converter(path)
+
+    def _run():
+        converter = Converter(path)
+        try:
+            converter.convert(out_path)
+        finally:
+            converter.close()
+
+    # pdf2docx reconstructs layout from the PDF's text objects rather than
+    # doing OCR, and is known to hang (or run practically forever) on PDFs
+    # it wasn't designed for - image-only/scanned pages especially. That
+    # used to freeze this whole conversion permanently: ConversionWorker
+    # calls convert_file() synchronously, so a stuck call here stalled the
+    # entire queue with no way to cancel or remove the item. Running it on
+    # its own thread with a hard timeout bounds the wait - a problem file
+    # now surfaces a clear "Erro" after a while instead of hanging forever.
+    # The stuck thread itself is abandoned (not safely killable from
+    # Python), but it can no longer take the app down with it.
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        converter.convert(out_path)
+        future = pool.submit(_run)
+        try:
+            future.result(timeout=180)
+        except FutureTimeoutError:
+            raise RuntimeError(
+                "A conversão para DOCX demorou demais e foi interrompida. Isso "
+                "costuma acontecer com PDFs digitalizados (só imagem, sem texto "
+                "selecionável), que essa conversão não suporta bem. Tente "
+                "converter para PDF ou TXT."
+            ) from None
     finally:
-        converter.close()
+        pool.shutdown(wait=False)
     return out_path
 
 

@@ -166,12 +166,26 @@ def enhance_grayscale(image_bgr: np.ndarray) -> np.ndarray:
 
 def enhance_bw(image_bgr: np.ndarray) -> np.ndarray:
     """Classic scanner black & white: adaptive threshold, crisp black text
-    on a white background."""
+    on a white background.
+
+    A phone photo carries far more paper-texture, grain and uneven-lighting
+    noise than a real flatbed scan. The previous fixed 3x3 blur + a tiny
+    11px threshold neighborhood was tuned for a small/low-res scan, not a
+    modern multi-megapixel phone photo: on those, that tiny window reacted
+    to individual paper-fiber and lighting variations as if they were text,
+    producing a page that looked like static. Denoising more aggressively
+    first, scaling the threshold's neighborhood to the image's own
+    resolution instead of a fixed tiny window, and mopping up any leftover
+    speckle with a median blur afterward gets back to a clean black-on-white
+    "scanner" look regardless of the source photo's resolution."""
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
-    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+    gray = cv2.fastNlMeansDenoising(gray, None, h=10, templateWindowSize=7, searchWindowSize=21)
+
+    block_size = max(15, (min(gray.shape[:2]) // 30) | 1)  # odd, scales with resolution
     bw = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2,
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, block_size, 8,
     )
+    bw = cv2.medianBlur(bw, 3)
     return cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
 
 
