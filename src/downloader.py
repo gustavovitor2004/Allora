@@ -85,6 +85,63 @@ UNAVAILABLE_MARKERS = (
 )
 
 
+class _QuietLogger:
+    """A no-op yt-dlp logger. "quiet"/"no_warnings" suppress most output,
+    but not every code path in yt-dlp (or a library it calls into, e.g.
+    urllib3) checks those flags before logging - some just call straight
+    into whatever `logger` was configured. Passing this instead of leaving
+    yt-dlp's default logger installed means those calls always land on a
+    method that does nothing, rather than one that ends up writing to
+    sys.stdout/sys.stderr - which are None in this app's --windowed
+    PyInstaller build (no console attached), so an unguarded write there
+    would raise instead of just printing."""
+
+    def debug(self, msg):
+        pass
+
+    def info(self, msg):
+        pass
+
+    def warning(self, msg):
+        pass
+
+    def error(self, msg):
+        pass
+
+
+def _lower_thread_priority():
+    """Best-effort, Windows-only: drop this background thread (metadata
+    fetch or an actual download) to below-normal OS priority.
+
+    yt-dlp's extraction step for a long video is genuinely CPU-heavy on a
+    single thread with very few natural yield points - most visibly the
+    JS "nsig" decipherer it runs in pure Python to work around YouTube's
+    throttling, which for a long/complex video can burn a solid chunk of
+    CPU time with the GIL held almost continuously. At default (equal)
+    thread priority, Windows can end up favoring that busy background
+    thread over the GUI thread's own event loop for the duration of that
+    burst - which shows up exactly as reported: the window looks frozen
+    (no repaint), but clicks still land once you force a repaint by
+    minimizing/restoring, because Windows was still queuing that input the
+    whole time, just not letting the GUI thread get scheduled to process
+    it. Running background work at BELOW_NORMAL priority tells the
+    scheduler to always prefer the GUI thread when both want the CPU,
+    without slowing the download itself in any way that matters (it's
+    still network-bound almost all the time). Best-effort and silently
+    skipped on any failure or non-Windows platform - never worth breaking
+    a download over."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+
+        THREAD_PRIORITY_BELOW_NORMAL = -1
+        kernel32 = ctypes.windll.kernel32
+        kernel32.SetThreadPriority(kernel32.GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL)
+    except Exception:
+        pass
+
+
 class CancelledError(Exception):
     """Raised internally when the user cancels an in-progress download."""
 
@@ -213,12 +270,14 @@ class DownloadManager(QObject):
     # ------------------------------------------------------------------
 
     def _fetch_metadata(self, item: DownloadItem):
+        _lower_thread_priority()
         item.status = DownloadItem.STATUS_FETCHING
         self.item_updated.emit(item.id)
         try:
             opts = {
                 "quiet": True,
                 "no_warnings": True,
+                "logger": _QuietLogger(),
                 "noplaylist": True,
                 "skip_download": True,
                 "socket_timeout": 15,
@@ -305,6 +364,7 @@ class DownloadManager(QObject):
     # ------------------------------------------------------------------
 
     def _download_worker(self, item: DownloadItem):
+        _lower_thread_priority()
         max_attempts = 3
         last_error = None
 
@@ -412,6 +472,7 @@ class DownloadManager(QObject):
             "postprocessor_hooks": [postprocessor_hook],
             "quiet": True,
             "no_warnings": True,
+            "logger": _QuietLogger(),
             "retries": 3,
             "fragment_retries": 3,
             "writethumbnail": settings.save_thumbnail,
