@@ -831,7 +831,18 @@ class UrlInput(QPlainTextEdit):
         self._on_submit = on_submit
         self.setPlaceholderText("Cole o link aqui... (um por linha para vários vídeos)")
         self.setFixedHeight(40)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # AlwaysOff, not AsNeeded: what looked like a mystery icon docked to
+        # the field's right edge (reported as two small "monitor" glyphs)
+        # turned out to be Qt's own native scrollbar up/down arrow buttons,
+        # showing up whenever pasted text needed more than the field's
+        # fixed height - not a Windows IME/touch-keyboard overlay at all,
+        # which is why the _detach_windows_ime() workaround below never
+        # touched it. This field is meant to look like a single line (see
+        # class docstring), so it should never show a scrollbar - overflow
+        # from a multi-URL paste just isn't visible before Enter is
+        # pressed, which is fine since on_add_clicked() reads and clears
+        # the whole text at once rather than displaying it for editing.
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
         # Qt's own WA_InputMethodEnabled only turns off Qt's IME candidate
