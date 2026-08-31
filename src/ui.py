@@ -874,6 +874,16 @@ class UrlInput(QPlainTextEdit):
                     raise OSError("ImmAssociateContextEx returned FALSE")
             except (AttributeError, OSError):
                 ctypes.windll.imm32.ImmAssociateContext(hwnd, None)
+
+            # The visible icon itself (the little keyboard glyph docked to
+            # the field's right edge) isn't drawn by IME at all - it's the
+            # separate "touch keyboard invocation" affordance TextInputHost
+            # overlays on any focusable/editable control system-wide since
+            # Windows 10 1903. The IME detach above doesn't touch it. The
+            # Microsoft-documented opt-out (also how Chromium suppresses it
+            # on every editable HWND - see ui/base/win/internal_constants.cc)
+            # is tagging the window with this exact property name.
+            ctypes.windll.user32.SetPropW(hwnd, "MicrosoftTabletPenServiceProperty", ctypes.c_void_p(1))
         except Exception:
             pass
 
