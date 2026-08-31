@@ -48,10 +48,6 @@ class Settings:
     theme: str = DEFAULT_THEME  # key into theme.THEMES
     ocr_output_dir: str = DEFAULT_OCR_OUTPUT_DIR
     doc_convert_output_dir: str = DEFAULT_DOC_CONVERT_OUTPUT_DIR
-    # Release tag ("v1.3.0") the user last chose "Manter esta versão" for -
-    # the startup update check (updater.py) won't nag about that same tag
-    # again, only about a newer one.
-    dismissed_update_version: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

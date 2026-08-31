@@ -27,8 +27,8 @@ icon-bearing widget gets rebuilt when the user switches theme.
 
 import os
 
-from PySide6.QtCore import Qt, QSize, QUrl, QPoint
-from PySide6.QtGui import QDesktopServices, QImage, QPixmap
+from PySide6.QtCore import Qt, QSize, QPoint
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
@@ -47,7 +47,6 @@ from theme import (
     apply_theme as set_app_theme, repolish, theme_colors,
     THEME_VARIANTS, base_theme_names, theme_key_to_base_and_mode, resolve_theme_variant,
 )
-from updater import UpdateCheckWorker
 from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path
 from version import APP_VERSION
 
@@ -960,7 +959,6 @@ class MainWindow(QMainWindow):
         self._connect_manager_signals()
         self.apply_theme(settings.theme)
         self._check_ffmpeg_on_start()
-        self._check_for_updates()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1488,42 +1486,6 @@ class MainWindow(QMainWindow):
             self._on_ffmpeg_missing()
 
     # ------------------------------------------------------------------
-    # Update check
-    # ------------------------------------------------------------------
-
-    def _check_for_updates(self):
-        """Runs on a background thread (see updater.py) so a slow or
-        unreachable GitHub never delays the window opening. Kept as
-        self._update_worker so it isn't garbage-collected mid-request, and
-        stopped in closeEvent() if the user closes the app before it
-        finishes."""
-        self._update_worker = UpdateCheckWorker(self)
-        self._update_worker.update_available.connect(self._on_update_available)
-        self._update_worker.start()
-
-    def _on_update_available(self, tag_name: str, html_url: str):
-        if tag_name == self.settings.dismissed_update_version:
-            return
-
-        box = QMessageBox(self)
-        box.setWindowTitle("Nova versão disponível")
-        box.setIcon(QMessageBox.Information)
-        box.setText(
-            f"Uma nova versão do Allora está disponível: {tag_name}\n"
-            f"(você está usando a {APP_VERSION}).\n\n"
-            "Quer abrir a página de download no GitHub?"
-        )
-        open_btn = box.addButton("Abrir no GitHub", QMessageBox.AcceptRole)
-        box.addButton("Manter esta versão", QMessageBox.RejectRole)
-        box.exec()
-
-        if box.clickedButton() is open_btn:
-            QDesktopServices.openUrl(QUrl(html_url))
-        else:
-            self.settings.dismissed_update_version = tag_name
-            save_settings(self.settings)
-
-    # ------------------------------------------------------------------
     # Theme
     # ------------------------------------------------------------------
 
@@ -1669,9 +1631,6 @@ class MainWindow(QMainWindow):
         return super().nativeEvent(eventType, message)
 
     def closeEvent(self, event):
-        if getattr(self, "_update_worker", None) is not None and self._update_worker.isRunning():
-            self._update_worker.quit()
-            self._update_worker.wait(500)
         self.manager.shutdown()
         self.conversion_manager.shutdown()
         super().closeEvent(event)
