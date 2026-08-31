@@ -103,7 +103,9 @@ def make_row_action_button(on_click, theme_name: str = "classic_dark") -> QPushB
 def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark") -> None:
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
-    btn.setToolTip({"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover"}.get(name, ""))
+    btn.setToolTip(
+        {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover", "copy": "Copiar link"}.get(name, "")
+    )
 
 
 class Header(QFrame):
@@ -255,6 +257,21 @@ class QueueItemWidget(QFrame):
         self.action_btn = make_row_action_button(self._on_action_clicked, theme_name)
         top_row.addWidget(self.action_btn, alignment=Qt.AlignTop)
 
+        # Only shown on Erro/Indisponível (see refresh()) - error is the one
+        # state where a single action button isn't enough: the user may want
+        # to copy the link before it's lost (no way back to it once removed,
+        # since the source tab it came from is long gone) and/or remove the
+        # item, on top of the existing retry.
+        self.copy_btn = make_row_action_button(self._on_copy_link_clicked, theme_name)
+        set_action_icon(self.copy_btn, "copy", theme_name)
+        self.copy_btn.setVisible(False)
+        top_row.addWidget(self.copy_btn, alignment=Qt.AlignTop)
+
+        self.remove_btn = make_row_action_button(self._on_remove_clicked, theme_name)
+        set_action_icon(self.remove_btn, "trash", theme_name)
+        self.remove_btn.setVisible(False)
+        top_row.addWidget(self.remove_btn, alignment=Qt.AlignTop)
+
         outer.addLayout(top_row)
         self._thumb_loaded = False
         self._set_thumb_icon("film")
@@ -278,6 +295,11 @@ class QueueItemWidget(QFrame):
                 self._thumb_loaded = True
 
         self.progress_bar.setValue(int(item.progress))
+
+        # Reset per-status extras before the branches below re-show what's
+        # relevant - only the Erro/Indisponível branch turns these back on.
+        self.copy_btn.setVisible(False)
+        self.remove_btn.setVisible(False)
 
         status = item.status
         if status == DownloadItem.STATUS_DOWNLOADING:
@@ -312,6 +334,8 @@ class QueueItemWidget(QFrame):
             set_action_icon(self.action_btn, "retry", self.theme_name)
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            self.copy_btn.setVisible(True)
+            self.remove_btn.setVisible(True)
         elif status == DownloadItem.STATUS_CANCELLED:
             self.detail_label.setText("Cancelado")
             set_pill(self.pill, "Cancelado", "neutral")
@@ -342,12 +366,23 @@ class QueueItemWidget(QFrame):
         if item.status in (DownloadItem.STATUS_ERROR, DownloadItem.STATUS_UNAVAILABLE):
             self.manager.retry_item(self.item_id)
         elif item.status in (DownloadItem.STATUS_DONE, DownloadItem.STATUS_CANCELLED):
-            self.manager.items.pop(self.item_id, None)
-            if self.item_id in self.manager.order:
-                self.manager.order.remove(self.item_id)
-            self.manager.item_removed.emit(self.item_id)
+            self._remove_self()
         else:
             self.manager.cancel_item(self.item_id)
+
+    def _on_copy_link_clicked(self):
+        item = self.manager.get_item(self.item_id)
+        if item is not None and item.url:
+            QApplication.clipboard().setText(item.url)
+
+    def _on_remove_clicked(self):
+        self._remove_self()
+
+    def _remove_self(self):
+        self.manager.items.pop(self.item_id, None)
+        if self.item_id in self.manager.order:
+            self.manager.order.remove(self.item_id)
+        self.manager.item_removed.emit(self.item_id)
 
 
 class DropZone(QFrame):
