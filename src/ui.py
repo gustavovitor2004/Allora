@@ -900,6 +900,17 @@ class UrlInput(QPlainTextEdit):
         self._detach_windows_ime()
         super().focusInEvent(event)
 
+    def showEvent(self, event):
+        # The __init__-time call happens before this widget is parented
+        # into its layout (see input_row.addWidget() in
+        # MainWindow._build_downloads_tab()) - Qt can recreate the native
+        # HWND on reparenting, silently discarding whatever winId() pointed
+        # at during __init__. By the time showEvent fires the widget is
+        # fully parented and its HWND is final, so this is the call that
+        # actually sticks.
+        super().showEvent(event)
+        self._detach_windows_ime()
+
 
 class MainWindow(QMainWindow):
     def __init__(self, manager: DownloadManager, conversion_manager: ConversionManager, settings: Settings):
