@@ -33,7 +33,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QStackedWidget,
+    QMessageBox, QFrame, QStackedWidget, QTabWidget,
 )
 
 from downloader import DownloadItem, DownloadManager
@@ -559,14 +559,12 @@ class SettingsDialog(QDialog):
         body = QWidget()
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(16, 16, 16, 16)
-        body_layout.setSpacing(24)
+        body_layout.setSpacing(16)
 
-        body_layout.addLayout(self._build_downloads_group(settings))
-        body_layout.addLayout(self._build_appearance_group(settings))
-
-        self.ffmpeg_status_label = QLabel()
-        body_layout.addWidget(self.ffmpeg_status_label)
-        self._refresh_ffmpeg_status()
+        tabs = QTabWidget()
+        tabs.addTab(self._build_downloads_tab(settings), "Downloads")
+        tabs.addTab(self._build_appearance_tab(settings), "Aparência")
+        body_layout.addWidget(tabs)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
@@ -612,23 +610,14 @@ class SettingsDialog(QDialog):
         return bar
 
     # ------------------------------------------------------------------
-    # Group builders
+    # Tab pages
     # ------------------------------------------------------------------
 
-    def _group_header(self, text: str) -> QVBoxLayout:
-        col = QVBoxLayout()
-        col.setSpacing(8)
-        label = QLabel(text)
-        label.setObjectName("SectionLabel")
-        col.addWidget(label)
-        divider = QFrame()
-        divider.setObjectName("Divider")
-        divider.setFixedHeight(1)
-        col.addWidget(divider)
-        return col
-
-    def _build_downloads_group(self, settings: Settings) -> QVBoxLayout:
-        col = self._group_header("DOWNLOADS")
+    def _build_downloads_tab(self, settings: Settings) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(4, 16, 4, 4)
+        outer.setSpacing(16)
 
         grid = QGridLayout()
         grid.setVerticalSpacing(8)
@@ -691,12 +680,21 @@ class SettingsDialog(QDialog):
         grid.addWidget(self._ffmpeg_browse_btn, row, 2)
         row += 1
 
-        col.addLayout(grid)
-        self._refresh_field_icons()
-        return col
+        outer.addLayout(grid)
 
-    def _build_appearance_group(self, settings: Settings) -> QVBoxLayout:
-        col = self._group_header("APARÊNCIA")
+        self.ffmpeg_status_label = QLabel()
+        outer.addWidget(self.ffmpeg_status_label)
+        self._refresh_ffmpeg_status()
+
+        outer.addStretch(1)
+        self._refresh_field_icons()
+        return page
+
+    def _build_appearance_tab(self, settings: Settings) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(4, 16, 4, 4)
+        outer.setSpacing(16)
 
         grid = QGridLayout()
         grid.setVerticalSpacing(8)
@@ -720,9 +718,10 @@ class SettingsDialog(QDialog):
         self.theme_mode_btn.clicked.connect(self._toggle_theme_mode)
         grid.addWidget(self.theme_mode_btn, 1, 1, 1, 2)
 
-        col.addLayout(grid)
+        outer.addLayout(grid)
+        outer.addStretch(1)
         self._refresh_theme_mode_button()
-        return col
+        return page
 
     # ------------------------------------------------------------------
     # Theme live preview - selecting a base theme or toggling light/dark
