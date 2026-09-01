@@ -470,7 +470,19 @@ class ScannerSubTab(QWidget):
         if self.result_image is None:
             return
         output_dir = self.settings.ocr_output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        # [FIX] Was unguarded: if the configured folder lives on a drive
+        # that's since been unplugged or a directory that was deleted, this
+        # raised OSError straight onto the GUI thread (unhandled - the
+        # button just died). It now fails the same way the rest of this
+        # method already reports failures.
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Pasta indisponível",
+                f"Não foi possível acessar a pasta de saída:\n{output_dir}\n\n{exc}",
+            )
+            return
 
         filters = {
             "jpeg": ("Imagem JPEG (*.jpg *.jpeg)", "jpg"),
@@ -493,6 +505,19 @@ class ScannerSubTab(QWidget):
             QMessageBox.information(self, "Salvo", f"Arquivo salvo em:\n{path}")
         except Exception as exc:  # noqa: BLE001 - never crash silently
             QMessageBox.critical(self, "Erro ao salvar", str(exc))
+
+    # [FIX] Added: nothing used to stop this QThread when the app closed.
+    # A scan still running at exit meant Qt tearing down a live QThread
+    # ("QThread: Destroyed while thread is still running" -> abort), which
+    # is a crash on close, not a clean shutdown. Called from
+    # DocumentosTab.shutdown() <- MainWindow.closeEvent().
+    def shutdown(self):
+        worker = self.worker
+        if worker is not None and worker.isRunning():
+            # Bounded wait: the scan pipeline has no cancellation point, so
+            # we give it a moment to land rather than blocking the close
+            # forever if it's mid-denoise on a huge photo.
+            worker.wait(3000)
 
     def on_reset(self):
         self.current_path = None
@@ -925,7 +950,16 @@ class ConvertSubTab(QWidget):
             return
         target_ext = self.target_combo.currentText().lower()
         output_dir = self.settings.doc_convert_output_dir
-        os.makedirs(output_dir, exist_ok=True)
+        # [FIX] Same unguarded os.makedirs as ScannerSubTab.on_save_as - an
+        # output folder on a removed drive raised OSError on the GUI thread
+        # and the Converter button silently did nothing. Reported through
+        # this tab's existing error label instead.
+        try:
+            os.makedirs(output_dir, exist_ok=True)
+        except OSError as exc:
+            self.error_label.setText(f"Não foi possível acessar a pasta de saída: {exc}")
+            self.error_label.setVisible(True)
+            return
 
         self._merge_active = self.merge_checkbox.isVisible() and self.merge_checkbox.isChecked()
 
@@ -1074,6 +1108,19 @@ class ConvertSubTab(QWidget):
     def on_open_folder(self):
         QDesktopServices.openUrl(QUrl.fromLocalFile(self.settings.doc_convert_output_dir))
 
+    # [FIX] Added - see ScannerSubTab.shutdown() for why. Extra wrinkle
+    # here: this worker can be blocked inside a BlockingQueuedConnection
+    # waiting on the GUI thread for a PDF password, so an unbounded wait()
+    # from the GUI thread would deadlock outright. The bounded wait can't.
+    def shutdown(self):
+        worker = self.worker
+        if worker is not None and worker.isRunning():
+            try:
+                worker.password_requested.disconnect(self._on_password_requested)
+            except (RuntimeError, TypeError):
+                pass  # never connected, or already torn down
+            worker.wait(3000)
+
 
 class DocumentosTab(QWidget):
     """Top-level widget registered as the "Documentos" tab in MainWindow."""
@@ -1103,3 +1150,10 @@ class DocumentosTab(QWidget):
         self.convert_tab.set_theme(theme_name)
         self.sub_tabs.setTabIcon(0, make_icon("search", colors["text_secondary"], size=15))
         self.sub_tabs.setTabIcon(1, make_icon("convert", colors["text_secondary"], size=15))
+
+    # [FIX] Added: MainWindow.closeEvent() shut down the download and
+    # conversion managers but knew nothing about this tab's QThreads, so a
+    # scan or document conversion running at exit was torn down live.
+    def shutdown(self):
+        self.scanner_tab.shutdown()
+        self.convert_tab.shutdown()
