@@ -11,6 +11,9 @@ Same-category conversions (video->video, audio->audio, image->image) match
 cross-category exception: extracting just the audio track from a video the
 user already has locally is a distinct, common need from the Downloads
 tab's "audio only" option, which only applies to a fresh online download.
+
+As in downloader.py, mutating `items`/`order` must always happen under
+`_lock` (see remove_item) - the dispatcher thread iterates both.
 """
 
 import itertools
@@ -162,9 +165,17 @@ class ConversionManager(QObject):
     def get_item(self, item_id: int):
         return self.items.get(item_id)
 
-    def get_all_items(self):
+    # [FIX] See DownloadManager.remove_item - identical race, identical fix:
+    # the UI used to pop from items/order directly, unlocked, from the GUI
+    # thread while _dispatch_loop iterated them, which could raise KeyError
+    # in the dispatcher and kill it.
+    def remove_item(self, item_id: int) -> None:
         with self._lock:
-            return [self.items[i] for i in self.order if i in self.items]
+            existed = self.items.pop(item_id, None) is not None
+            if item_id in self.order:
+                self.order.remove(item_id)
+        if existed:
+            self.item_removed.emit(item_id)
 
     def start_all(self):
         self.running = True
@@ -234,9 +245,12 @@ class ConversionManager(QObject):
                 free_slots = max(0, self.settings.max_simultaneous - len(self.active_threads))
                 if free_slots <= 0:
                     continue
+                # [FIX] `if i in self.items` guard added - see the identical
+                # fix in downloader.py's dispatcher.
                 candidates = [
                     self.items[i] for i in self.order
-                    if self.items[i].id not in self.active_threads
+                    if i in self.items
+                    and self.items[i].id not in self.active_threads
                     and self.items[i].status == ConversionItem.STATUS_WAITING
                 ]
                 to_start = candidates[:free_slots]
@@ -252,8 +266,10 @@ class ConversionManager(QObject):
             if not to_start:
                 with self._lock:
                     any_active = bool(self.active_threads)
+                    # [FIX] Same missing `if i in self.items` guard as above.
                     any_waiting = any(
                         self.items[i].status == ConversionItem.STATUS_WAITING for i in self.order
+                        if i in self.items
                     )
                 if not any_active and not any_waiting and self.running:
                     self.queue_idle.emit()
