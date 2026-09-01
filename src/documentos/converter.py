@@ -20,9 +20,10 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
-from utils import find_poppler_bin_dir, no_window_flags, safe_filename, unique_path
-
-IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
+# [AUDIT] Section 3 - duplicate code: IMAGE_EXTS used to be defined here
+# AND, identically, in documentos/scanner_engine.py - now shared from
+# utils.py (that copy turned out to be dead code and was removed instead).
+from utils import IMAGE_EXTS, find_poppler_bin_dir, no_window_flags, safe_filename, unique_path, fit_to_page
 
 POPPLER_INSTALL_MESSAGE = (
     "O poppler não foi encontrado neste computador. Ele é necessário para "
@@ -198,7 +199,7 @@ def _copy_passthrough(path: str, output_dir: str) -> str:
 def _image_to_pdf(path: str, output_dir: str) -> str:
     image = Image.open(path).convert("RGB")
     page_w, page_h = A4
-    draw_w, draw_h, x, y = _fit_to_page(image.size, (page_w, page_h))
+    draw_w, draw_h, x, y = fit_to_page(image.size, (page_w, page_h))
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
     out_path = unique_path(output_dir, base, "pdf")
@@ -224,9 +225,9 @@ def _pdf_to_images(path: str, target_ext: str, output_dir: str, progress_cb=None
     from pdf2image import convert_from_path
 
     try:
-        # Explicit poppler_path: MasterApp.bat downloads Poppler into
-        # tools/poppler instead of registering it on PATH, so pdf2image
-        # needs to be told exactly where to find it. Passing None (when
+        # Explicit poppler_path: Poppler is expected in tools/poppler next
+        # to the app rather than registered on PATH, so pdf2image needs to
+        # be told exactly where to find it. Passing None (when
         # nothing is found - e.g. poppler already IS on PATH) keeps the
         # previous behavior intact.
         pages = convert_from_path(path, dpi=200, poppler_path=find_poppler_bin_dir() or None)
@@ -248,46 +249,74 @@ def _pdf_to_images(path: str, target_ext: str, output_dir: str, progress_cb=None
     return out_paths
 
 
-def _pdf_to_docx(path: str, output_dir: str) -> str:
-    from concurrent.futures import ThreadPoolExecutor
-    from concurrent.futures import TimeoutError as FutureTimeoutError
-
+def _run_pdf_to_docx_subprocess(path: str, out_path: str) -> None:
+    """The actual pdf2docx call, run inside its own child process - see
+    _pdf_to_docx() below for why. Must stay a plain top-level function (not
+    a closure) so `multiprocessing` (spawn start method, the only one
+    available on Windows) can pickle and re-import it in the child."""
     from pdf2docx import Converter
+
+    converter = Converter(path)
+    try:
+        converter.convert(out_path)
+    finally:
+        converter.close()
+
+
+def _pdf_to_docx(path: str, output_dir: str) -> str:
+    import multiprocessing
 
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
     out_path = unique_path(output_dir, base, "docx")
 
-    def _run():
-        converter = Converter(path)
-        try:
-            converter.convert(out_path)
-        finally:
-            converter.close()
+    # [AUDIT] Section 1 - MEDIUM: pdf2docx reconstructs layout from the
+    # PDF's text objects rather than doing OCR, and is known to hang (or
+    # run practically forever) on PDFs it wasn't designed for - image-only
+    # /scanned pages especially. This used to run in a background THREAD
+    # with a bounded `future.result(timeout=...)` - that stopped the
+    # *queue* from freezing, but a Python thread can't actually be killed:
+    # the abandoned thread kept running in the background and could still
+    # finish writing out_path well after the UI had already reported
+    # "Erro", leaving an ambiguous, unexpectedly-completed file behind and
+    # leaking a worker thread for the rest of the app's lifetime. A real
+    # child PROCESS can be terminated for real, so a timeout here actually
+    # stops the work - no output is written after failure is reported.
+    #
+    # multiprocessing.freeze_support() (called at the top of main.py) is
+    # required for this to behave correctly in the PyInstaller --windowed
+    # build - without it, spawning this child process on Windows would
+    # re-execute the whole frozen app's entry point instead of just this
+    # function.
+    ctx = multiprocessing.get_context("spawn")
+    process = ctx.Process(target=_run_pdf_to_docx_subprocess, args=(path, out_path), daemon=True)
+    process.start()
+    process.join(timeout=180)
 
-    # pdf2docx reconstructs layout from the PDF's text objects rather than
-    # doing OCR, and is known to hang (or run practically forever) on PDFs
-    # it wasn't designed for - image-only/scanned pages especially. That
-    # used to freeze this whole conversion permanently: ConversionWorker
-    # calls convert_file() synchronously, so a stuck call here stalled the
-    # entire queue with no way to cancel or remove the item. Running it on
-    # its own thread with a hard timeout bounds the wait - a problem file
-    # now surfaces a clear "Erro" after a while instead of hanging forever.
-    # The stuck thread itself is abandoned (not safely killable from
-    # Python), but it can no longer take the app down with it.
-    pool = ThreadPoolExecutor(max_workers=1)
-    try:
-        future = pool.submit(_run)
-        try:
-            future.result(timeout=180)
-        except FutureTimeoutError:
-            raise RuntimeError(
-                "A conversão para DOCX demorou demais e foi interrompida. Isso "
-                "costuma acontecer com PDFs digitalizados (só imagem, sem texto "
-                "selecionável), que essa conversão não suporta bem. Tente "
-                "converter para PDF ou TXT."
-            ) from None
-    finally:
-        pool.shutdown(wait=False)
+    if process.is_alive():
+        process.terminate()
+        process.join(timeout=5)
+        if process.is_alive():
+            process.kill()
+            process.join(timeout=5)
+        # The child may have been terminated mid-write - never hand back a
+        # half-written file alongside a reported failure.
+        if os.path.exists(out_path):
+            try:
+                os.remove(out_path)
+            except OSError:
+                pass
+        raise RuntimeError(
+            "A conversão para DOCX demorou demais e foi interrompida. Isso "
+            "costuma acontecer com PDFs digitalizados (só imagem, sem texto "
+            "selecionável), que essa conversão não suporta bem. Tente "
+            "converter para PDF ou TXT."
+        )
+
+    if process.exitcode != 0 or not os.path.exists(out_path):
+        raise RuntimeError(
+            f"Falha ao converter PDF para DOCX (código de saída {process.exitcode})."
+        )
+
     return out_path
 
 
@@ -312,13 +341,36 @@ def _docx_to_pdf(path: str, output_dir: str) -> str:
     base = safe_filename(os.path.splitext(os.path.basename(path))[0])
     out_path = unique_path(output_dir, base, "pdf")
 
+    # [AUDIT] Section 1 - MEDIUM: docx2pdf drives Word over COM on Windows,
+    # and COM requires the calling thread to call CoInitialize() before
+    # using it. This conversion runs inside a QThread (ConversionWorker),
+    # which was never COM-initialized - so docx2pdf could fail here even
+    # with a working Word install, silently, since the `except Exception:
+    # pass` below discarded the real reason. That real reason is now kept
+    # and appended to the final error if the LibreOffice fallback also
+    # fails, instead of only ever reporting the generic "install Word or
+    # LibreOffice" message regardless of what actually went wrong.
+    com_initialized = False
+    if os.name == "nt":
+        try:
+            import pythoncom
+            pythoncom.CoInitialize()
+            com_initialized = True
+        except Exception:
+            pass  # pywin32 not available - docx2pdf will fail on its own below
+
+    docx2pdf_error = None
     try:
         from docx2pdf import convert as docx2pdf_convert
         docx2pdf_convert(path, out_path)
         if os.path.exists(out_path):
             return out_path
-    except Exception:
-        pass  # fall through to the LibreOffice fallback below
+    except Exception as exc:  # noqa: BLE001 - keep the reason, fall through to LibreOffice
+        docx2pdf_error = str(exc)
+    finally:
+        if com_initialized:
+            import pythoncom
+            pythoncom.CoUninitialize()
 
     libreoffice = shutil.which("soffice") or shutil.which("libreoffice")
     if libreoffice:
@@ -331,9 +383,11 @@ def _docx_to_pdf(path: str, output_dir: str) -> str:
         if os.path.exists(out_path):
             return out_path
 
+    reason = f"\n\nDetalhe (Word/docx2pdf): {docx2pdf_error}" if docx2pdf_error else ""
     raise RuntimeError(
         "Não foi possível converter DOCX para PDF: é necessário ter o Microsoft "
         "Word instalado (Windows) ou o LibreOffice instalado no sistema."
+        f"{reason}"
     )
 
 
@@ -417,17 +471,6 @@ def _wrap_text_line(line: str, width: int):
     return lines or [""]
 
 
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-def _fit_to_page(image_size, page_size):
-    """Scale an image to fit centered inside a page, preserving aspect
-    ratio. Returns (draw_width, draw_height, x, y)."""
-    img_w, img_h = image_size
-    page_w, page_h = page_size
-    scale = min(page_w / img_w, page_h / img_h)
-    draw_w, draw_h = img_w * scale, img_h * scale
-    x = (page_w - draw_w) / 2
-    y = (page_h - draw_h) / 2
-    return draw_w, draw_h, x, y
+# [AUDIT] Section 3 - duplicate code: _fit_to_page() used to be defined
+# here AND, identically, in documentos/scanner_engine.py's save_as_pdf().
+# Both now use utils.fit_to_page().

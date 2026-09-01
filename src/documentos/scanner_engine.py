@@ -19,7 +19,12 @@ import os
 import cv2
 import numpy as np
 
-IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
+from utils import fit_to_page
+
+# [AUDIT] Section 3/4 - duplicate/dead code: this module used to carry its
+# own copy of IMAGE_EXTS (identical to documentos/converter.py's, now
+# shared from utils.py) - but nothing in this file, or anywhere importing
+# this module, ever actually referenced it. Removed rather than re-exported.
 
 MODE_COLOR = "color"
 MODE_GRAYSCALE = "grayscale"
@@ -239,12 +244,10 @@ def save_as_pdf(image_bgr: np.ndarray, output_path: str) -> None:
     rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
     pil_image = Image.fromarray(rgb)
 
-    page_w, page_h = A4
-    img_w, img_h = pil_image.size
-    scale = min(page_w / img_w, page_h / img_h)
-    draw_w, draw_h = img_w * scale, img_h * scale
-    x = (page_w - draw_w) / 2
-    y = (page_h - draw_h) / 2
+    # [AUDIT] Section 3 - duplicate code: was an inline copy of exactly what
+    # documentos/converter.py's _fit_to_page() already did - both now share
+    # utils.fit_to_page().
+    draw_w, draw_h, x, y = fit_to_page(pil_image.size, A4)
 
     c = canvas.Canvas(output_path, pagesize=A4)
     c.drawImage(ImageReader(pil_image), x, y, width=draw_w, height=draw_h)

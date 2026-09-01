@@ -16,12 +16,72 @@ simpler, equally thread-safe fit here - QThread's signals are marshaled to
 the GUI thread exactly like the QObject signals used elsewhere in the app.
 """
 
+import threading
 import time
 
+import cv2
+import numpy as np
 from PySide6.QtCore import QThread, Signal
+from PySide6.QtGui import QImage
 
 from documentos import scanner_engine
 from documentos import converter as doc_converter
+
+
+def bgr_to_qimage(image_bgr: np.ndarray) -> QImage:
+    """Convert an OpenCV BGR numpy array into a detached QImage. QImage
+    (unlike QPixmap) is safe to construct off the GUI thread, which is why
+    ImagePrepWorker below builds one instead of a QPixmap - the caller
+    converts it to a QPixmap once back on the GUI thread. Copies the buffer
+    explicitly so the QImage doesn't end up depending on the numpy array's
+    memory staying alive."""
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    rgb = np.ascontiguousarray(rgb)
+    height, width, channels = rgb.shape
+    qimage = QImage(rgb.data, width, height, channels * width, QImage.Format_RGB888)
+    return qimage.copy()
+
+
+class ImagePrepWorker(QThread):
+    """[AUDIT] Section 1/2 - HIGH: loads a source photo and finds its
+    document corners off the GUI thread. Selecting a full-resolution phone
+    photo used to do all of this synchronously in
+    ScannerSubTab._load_image() - a QPixmap decode, a second independent
+    OpenCV decode of the same file, and a full Canny/contour analysis -
+    which visibly froze the frameless window (no repaint) for a noticeable
+    moment. This worker does the OpenCV decode once and derives both the
+    preview image and the corner detection from that single array, off the
+    GUI thread; ScannerSubTab only touches the QImage it hands back."""
+
+    finished_ok = Signal(str, object, object)   # path, QImage preview, corners-or-None
+    failed = Signal(str, str)                   # path, error message
+
+    def __init__(self, image_path: str, parent=None):
+        super().__init__(parent)
+        self.image_path = image_path
+
+    def run(self):
+        try:
+            image_bgr = scanner_engine.load_image(self.image_path)
+        except Exception as exc:  # noqa: BLE001 - surface everything to the UI, never crash silently
+            self.failed.emit(self.image_path, str(exc))
+            return
+
+        try:
+            corners = scanner_engine.detect_document_corners(image_bgr)
+        except Exception:
+            # [AUDIT] Section 1 - LOW: previously this same broad except
+            # around both the decode AND the detection meant a genuine
+            # decode failure (Qt could open the file, OpenCV couldn't) was
+            # indistinguishable from "no four-sided contour found" - the UI
+            # just said borders weren't detected. Decode failures now go
+            # through the `failed` signal above with the real error message;
+            # this narrower except is only around detect_document_corners,
+            # where "no contour found" is an expected, non-fatal outcome.
+            corners = None
+
+        qimage = bgr_to_qimage(image_bgr)
+        self.finished_ok.emit(self.image_path, qimage, corners)
 
 
 class ScannerWorker(QThread):
@@ -37,8 +97,22 @@ class ScannerWorker(QThread):
         self.image_path = image_path
         self.corners = corners
         self.mode = mode
+        # [AUDIT] Section 1 - HIGH: cooperative cancellation flag for
+        # shutdown(). scanner_engine.process_document() is a single tight
+        # sequence of OpenCV calls with no yield points of its own, so this
+        # can only stop the run before it starts (checked below) - it can't
+        # interrupt an enhancement pass already in progress. A run already
+        # past this point is handled by ScannerSubTab.shutdown() keeping the
+        # worker alive until it actually finishes, instead of destroying a
+        # live QThread.
+        self.cancel_event = threading.Event()
+
+    def request_cancel(self):
+        self.cancel_event.set()
 
     def run(self):
+        if self.cancel_event.is_set():
+            return
         start = time.monotonic()
         try:
             result = scanner_engine.process_document(self.image_path, self.corners, self.mode)
@@ -83,9 +157,36 @@ class ConversionWorker(QThread):
         self.target_ext = target_ext
         self.merge = merge
         self.skip_ids = skip_ids if skip_ids is not None else set()
+        # [AUDIT] Section 1 - MEDIUM: `skip_ids` is a plain set mutated by
+        # the GUI thread (ConvertSubTab._on_delete_clicked) while this
+        # thread reads it - CPython's GIL happens to make individual
+        # add()/`in` calls atomic today, but there was no synchronization
+        # contract backing that, so it was implementation-detail-dependent
+        # rather than guaranteed. A real lock makes the contract explicit
+        # and correct regardless of interpreter internals.
+        self._skip_ids_lock = threading.Lock()
         self.output_name = output_name
         self.passwords = passwords or {}
         self.password_response = None
+        # [AUDIT] Section 1 - HIGH: cooperative cancellation for shutdown().
+        # Checked between files (individual mode) and before the merge
+        # starts (merge mode) - merge_to_pdf() itself is one call with no
+        # internal cancellation point, so a cancel requested mid-merge can't
+        # interrupt it; ConvertSubTab.shutdown() covers that remaining case
+        # the same way ScannerSubTab.shutdown() does, by not destroying a
+        # still-running worker.
+        self.cancel_event = threading.Event()
+
+    def request_cancel(self):
+        self.cancel_event.set()
+
+    def is_skipped(self, job_id: int) -> bool:
+        with self._skip_ids_lock:
+            return job_id in self.skip_ids
+
+    def add_skip(self, job_id: int) -> None:
+        with self._skip_ids_lock:
+            self.skip_ids.add(job_id)
 
     def _ask_password(self, path: str):
         # Runs on THIS thread (the conversion one) - the emit() below only
@@ -104,7 +205,9 @@ class ConversionWorker(QThread):
 
     def _run_individual(self):
         for job_id, path in self.jobs:
-            if job_id in self.skip_ids:
+            if self.cancel_event.is_set():
+                break
+            if self.is_skipped(job_id):
                 # Item removed from the list by the user while the
                 # conversion was running - skip silently, no signal (the
                 # corresponding widget has already been removed from the UI).
@@ -132,7 +235,11 @@ class ConversionWorker(QThread):
         # Merge mode: converts everything to PDF and joins it into a single
         # file, in the order received (which reflects the list's order,
         # including any drag-and-drop reordering).
-        remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
+        if self.cancel_event.is_set():
+            self.all_finished.emit()
+            return
+        with self._skip_ids_lock:
+            remaining_paths = [path for job_id, path in self.jobs if job_id not in self.skip_ids]
         try:
             out_path = doc_converter.merge_to_pdf(
                 remaining_paths, self.output_dir, self.output_name,

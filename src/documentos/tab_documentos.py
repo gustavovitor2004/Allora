@@ -28,11 +28,33 @@ from PySide6.QtWidgets import (
 
 from documentos import scanner_engine
 from documentos import converter as doc_converter
-from documentos.workers import ScannerWorker, ConversionWorker
+from documentos.workers import ImagePrepWorker, ScannerWorker, ConversionWorker
 from icons import make_icon
 from settings import save_settings
 from theme import repolish, theme_colors
 from utils import format_size
+
+
+# [AUDIT] Section 1 - HIGH: workers that outlive shutdown()'s bounded wait
+# get parked here instead of being dropped - letting the last Python
+# reference to a still-running QThread disappear (e.g. because the widget
+# that held it was destroyed) makes Qt destroy a live thread object, which
+# aborts the process ("QThread: Destroyed while thread is still running").
+# Each entry removes itself once it actually finishes.
+_ORPHANED_WORKERS = set()
+
+
+def _finish_or_keep_alive(worker, timeout_ms=3000):
+    """Give `worker` up to timeout_ms to finish. If it's still running past
+    that (its work has no cancellation point it has reached yet, or
+    cancellation isn't supported for the phase it's in), keep it alive in
+    _ORPHANED_WORKERS rather than letting it be destroyed mid-run."""
+    if worker is None or not worker.isRunning():
+        return
+    if worker.wait(timeout_ms):
+        return
+    _ORPHANED_WORKERS.add(worker)
+    worker.finished.connect(lambda: _ORPHANED_WORKERS.discard(worker))
 
 
 def _bgr_to_qpixmap(image_bgr: np.ndarray) -> QPixmap:
@@ -66,9 +88,25 @@ class CornerEditor(QWidget):
         self.image_size = (0, 0)   # (w, h) of the ORIGINAL image
         self.corners = []          # 4 (x, y) points in ORIGINAL image space
         self._dragging_index = None
+        # [AUDIT] Section 2/5 - MEDIUM: cache of self.pixmap pre-scaled to
+        # the widget's current display size. Dragging a corner calls
+        # self.update() on every mouse move, and paintEvent's own
+        # QPainter.drawPixmap(target, self.pixmap, ...) call previously
+        # re-scaled the ORIGINAL full-resolution photo from scratch on
+        # every one of those repaints - a real phone photo made corner
+        # dragging visibly laggy. The cache below is invalidated only when
+        # the source image or the display size actually changes (see
+        # _scaled_pixmap()), so a drag with no resize just reuses it.
+        self._scaled_cache = None
+        self._scaled_cache_size = None
 
-    def set_image(self, path: str, corners=None):
-        self.pixmap = QPixmap(path)
+    def set_image(self, pixmap: QPixmap, corners=None):
+        # [AUDIT] Section 5 - performance: used to take a file path and
+        # decode it a second time via QPixmap(path) - ScannerSubTab's
+        # ImagePrepWorker already decoded the file once (for corner
+        # detection) and hands over a ready QImage/QPixmap, so this now
+        # just takes that pixmap directly instead of re-reading the file.
+        self.pixmap = pixmap
         self.image_size = (self.pixmap.width(), self.pixmap.height())
         if corners is not None and len(corners) == 4:
             self.corners = [(float(x), float(y)) for x, y in corners]
@@ -76,6 +114,8 @@ class CornerEditor(QWidget):
             w, h = self.image_size
             self.corners = [(0, 0), (w, 0), (w, h), (0, h)]
         self._dragging_index = None
+        self._scaled_cache = None
+        self._scaled_cache_size = None
         self.update()
 
     def clear(self):
@@ -83,6 +123,8 @@ class CornerEditor(QWidget):
         self.image_size = (0, 0)
         self.corners = []
         self._dragging_index = None
+        self._scaled_cache = None
+        self._scaled_cache_size = None
         self.update()
 
     def has_image(self) -> bool:
@@ -119,6 +161,18 @@ class CornerEditor(QWidget):
         iy = max(0.0, min((y - offset_y) / scale, img_h))
         return ix, iy
 
+    def _scaled_pixmap(self, target_w: int, target_h: int) -> QPixmap:
+        """self.pixmap, smooth-scaled to (target_w, target_h), reusing the
+        cached copy when the target size matches the last call - see the
+        cache fields set up in __init__/set_image/clear."""
+        size = (target_w, target_h)
+        if self._scaled_cache is None or self._scaled_cache_size != size:
+            self._scaled_cache = self.pixmap.scaled(
+                target_w, target_h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation,
+            )
+            self._scaled_cache_size = size
+        return self._scaled_cache
+
     # --- painting -------------------------------------------------------------
 
     def paintEvent(self, event):
@@ -132,8 +186,11 @@ class CornerEditor(QWidget):
 
         scale, offset_x, offset_y = self._fit_rect()
         img_w, img_h = self.image_size
-        target = QRectF(offset_x, offset_y, img_w * scale, img_h * scale)
-        painter.drawPixmap(target, self.pixmap, QRectF(self.pixmap.rect()))
+        draw_w = max(1, round(img_w * scale))
+        draw_h = max(1, round(img_h * scale))
+        target = QRectF(offset_x, offset_y, draw_w, draw_h)
+        scaled_pixmap = self._scaled_pixmap(draw_w, draw_h)
+        painter.drawPixmap(target, scaled_pixmap, QRectF(scaled_pixmap.rect()))
 
         if len(self.corners) == 4:
             widget_points = [self._to_widget(p) for p in self.corners]
@@ -191,6 +248,16 @@ class ScannerSubTab(QWidget):
         self.result_pixmap = None
         self.showing_original = False
         self.worker = None
+        # [AUDIT] Section 1 - HIGH: image-load worker + a generation counter.
+        # Each call to _load_image() bumps this; a result whose generation
+        # doesn't match the current one (the user picked a different file
+        # before the first one finished analyzing) is discarded instead of
+        # overwriting a newer selection.
+        self.prep_worker = None
+        self._load_generation = 0
+        # [AUDIT] Section 2/5 - MEDIUM: cache for _refresh_result_display().
+        self._preview_cache_key = None
+        self._preview_cache = None
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 12, 12, 12)
@@ -225,7 +292,11 @@ class ScannerSubTab(QWidget):
         self.result_label.setAlignment(Qt.AlignCenter)
         self.result_label.setWordWrap(True)
         self.result_label.setMinimumSize(240, 240)
-        self.result_label.setStyleSheet("background-color: rgba(255,255,255,15); border-radius: 6px;")
+        # [AUDIT] Section 5 - performance/theme: was a hardcoded inline
+        # rgba(255,255,255,15) - nearly invisible (wrong contrast direction)
+        # in light themes. QLabel#ResultPreview in theme.py now carries this
+        # via the same theme-aware surface tone every other panel uses.
+        self.result_label.setObjectName("ResultPreview")
         right_layout.addWidget(self.result_label, stretch=1)
 
         result_footer = QHBoxLayout()
@@ -355,32 +426,21 @@ class ScannerSubTab(QWidget):
         self._load_image(path)
 
     def _load_image(self, path):
-        pixmap = QPixmap(path)
-        if pixmap.isNull():
-            QMessageBox.critical(self, "Erro ao abrir imagem", f"Não foi possível abrir:\n{path}")
-            return
+        # [AUDIT] Section 1/2 - HIGH: this used to decode the file via
+        # QPixmap(path), decode it AGAIN via OpenCV, and run the full
+        # Canny/contour edge-detection pass, all synchronously on the GUI
+        # thread - a large phone photo visibly froze the (frameless, so
+        # non-repainting-while-blocked) window for a noticeable moment.
+        # That work now happens in ImagePrepWorker, off the GUI thread; this
+        # method just kicks it off and shows a "working" state so the delay
+        # reads as progress instead of an apparent freeze.
+        self._load_generation += 1
+        generation = self._load_generation
 
         self.current_path = path
-        self.original_pixmap = pixmap
-
-        corners = None
-        try:
-            image = scanner_engine.load_image(path)
-            corners = scanner_engine.detect_document_corners(image)
-        except Exception:
-            corners = None
-
-        self.corner_editor.set_image(path, corners)
-        if corners is None:
-            self.detect_note_label.setText(
-                "Bordas não detectadas automaticamente. Ajuste manualmente arrastando os cantos."
-            )
-        else:
-            self.detect_note_label.setText(
-                "Bordas detectadas automaticamente. Arraste os pontos para ajustar."
-            )
-
-        self.scan_btn.setEnabled(True)
+        self.select_btn.setEnabled(False)
+        self.scan_btn.setEnabled(False)
+        self.detect_note_label.setText("Preparando imagem e detectando bordas...")
         self.result_image = None
         self.result_pixmap = None
         self.showing_original = False
@@ -391,6 +451,42 @@ class ScannerSubTab(QWidget):
         self.elapsed_label.setText("")
         for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
             btn.setEnabled(False)
+
+        self.prep_worker = ImagePrepWorker(path)
+        self.prep_worker.finished_ok.connect(
+            lambda p, qimage, corners: self._on_image_prepared(generation, p, qimage, corners)
+        )
+        self.prep_worker.failed.connect(
+            lambda p, message: self._on_image_prep_failed(generation, p, message)
+        )
+        self.prep_worker.start()
+
+    def _on_image_prepared(self, generation, path, qimage, corners):
+        if generation != self._load_generation:
+            # The user selected a different file before this one finished -
+            # a stale result must never overwrite a newer selection.
+            return
+        pixmap = QPixmap.fromImage(qimage)
+        self.original_pixmap = pixmap
+        self.corner_editor.set_image(pixmap, corners)
+        if corners is None:
+            self.detect_note_label.setText(
+                "Bordas não detectadas automaticamente. Ajuste manualmente arrastando os cantos."
+            )
+        else:
+            self.detect_note_label.setText(
+                "Bordas detectadas automaticamente. Arraste os pontos para ajustar."
+            )
+        self.select_btn.setEnabled(True)
+        self.scan_btn.setEnabled(True)
+
+    def _on_image_prep_failed(self, generation, path, message):
+        if generation != self._load_generation:
+            return
+        self.current_path = None
+        self.detect_note_label.setText("")
+        self.select_btn.setEnabled(True)
+        QMessageBox.critical(self, "Erro ao abrir imagem", f"Não foi possível abrir:\n{path}\n\n{message}")
 
     # ------------------------------------------------------------------
     # Scan run
@@ -455,12 +551,24 @@ class ScannerSubTab(QWidget):
         pixmap = self.original_pixmap if self.showing_original else self.result_pixmap
         if pixmap is None or pixmap.isNull():
             return
-        scaled = pixmap.scaled(
-            self.result_label.width(), self.result_label.height(),
-            Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        )
+        # [AUDIT] Section 2/5 - MEDIUM: this runs on every resizeEvent tick
+        # (a live window-edge drag fires many of those a second) and used
+        # to smooth-rescale the full-resolution source pixmap from scratch
+        # every single time, even when the target size hadn't actually
+        # changed since the last call. Cached by (which pixmap, target
+        # size) - `id(pixmap)` changes whenever a genuinely new image
+        # (original photo vs. a fresh scan result) is assigned, since
+        # those are always new QPixmap objects rather than mutated in
+        # place.
+        target_w, target_h = self.result_label.width(), self.result_label.height()
+        cache_key = (id(pixmap), target_w, target_h)
+        if self._preview_cache_key != cache_key:
+            self._preview_cache = pixmap.scaled(
+                target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation,
+            )
+            self._preview_cache_key = cache_key
         self.result_label.setText("")
-        self.result_label.setPixmap(scaled)
+        self.result_label.setPixmap(self._preview_cache)
 
     # ------------------------------------------------------------------
     # Save / reset
@@ -512,12 +620,15 @@ class ScannerSubTab(QWidget):
     # is a crash on close, not a clean shutdown. Called from
     # DocumentosTab.shutdown() <- MainWindow.closeEvent().
     def shutdown(self):
-        worker = self.worker
-        if worker is not None and worker.isRunning():
-            # Bounded wait: the scan pipeline has no cancellation point, so
-            # we give it a moment to land rather than blocking the close
-            # forever if it's mid-denoise on a huge photo.
-            worker.wait(3000)
+        # [AUDIT] Section 1 - HIGH: request cooperative cancellation, give
+        # each worker a bounded moment to land, and keep it alive if it's
+        # still running past that instead of letting it be destroyed mid-run
+        # - see _finish_or_keep_alive().
+        if self.prep_worker is not None:
+            _finish_or_keep_alive(self.prep_worker)
+        if self.worker is not None:
+            self.worker.request_cancel()
+            _finish_or_keep_alive(self.worker)
 
     def on_reset(self):
         self.current_path = None
@@ -525,6 +636,8 @@ class ScannerSubTab(QWidget):
         self.result_image = None
         self.result_pixmap = None
         self.showing_original = False
+        self._preview_cache_key = None
+        self._preview_cache = None
         self.corner_editor.clear()
         self.detect_note_label.setText("")
         self.result_label.setPixmap(QPixmap())
@@ -606,6 +719,7 @@ class DocConversionItemWidget(QFrame):
         self.delete_btn.setFixedWidth(28)
         self.delete_btn.setIconSize(QSize(13, 13))
         self.delete_btn.setToolTip("Remover da lista")
+        self.delete_btn.setAccessibleName("Remover da lista")
         if on_delete:
             self.delete_btn.clicked.connect(on_delete)
         layout.addWidget(self.delete_btn)
@@ -627,6 +741,12 @@ class DocConversionItemWidget(QFrame):
         if detail:
             text = f"{text} — {detail[:60]}"
         self.status_label.setText(text)
+        # [AUDIT] Section 6 (design) - idea 3: same "full message on hover"
+        # fix as ui.py's QueueItemWidget/ConversionItemWidget - the label
+        # only ever showed the first 60 characters otherwise. Set (or
+        # cleared, for every non-error status) on every call, so a
+        # previous error's tooltip never lingers after a retry.
+        self.status_label.setToolTip(detail if detail else "")
         self.status_label.setObjectName(qss_kind)
         repolish(self.status_label)
         self.setProperty("status", self._CARD_STATUS.get(status_kind, "waiting"))
@@ -820,8 +940,14 @@ class ConvertSubTab(QWidget):
         if widget.status_kind == DocConversionItemWidget.STATUS_CONVERTING:
             return  # defensive - the button is already disabled in this state
         if self._converting:
-            # File not yet reached by the worker: flag it to be skipped.
-            self._skip_ids.add(job_id)
+            # [AUDIT] Section 1 - MEDIUM: routed through the worker's own
+            # locked add_skip() instead of mutating self._skip_ids (the same
+            # set object, shared by reference with the worker) directly -
+            # see ConversionWorker._skip_ids_lock in workers.py.
+            if self.worker is not None:
+                self.worker.add_skip(job_id)
+            else:
+                self._skip_ids.add(job_id)
         self._remove_job_row(job_id)
         if not self._converting:
             self._refresh_target_options()
@@ -1113,13 +1239,19 @@ class ConvertSubTab(QWidget):
     # waiting on the GUI thread for a PDF password, so an unbounded wait()
     # from the GUI thread would deadlock outright. The bounded wait can't.
     def shutdown(self):
+        # [AUDIT] Section 1 - HIGH: same pattern as ScannerSubTab.shutdown().
+        # The password-request case still needs the explicit disconnect
+        # first - a still-blocked worker waiting on that signal would
+        # deadlock the app's shutdown otherwise, since nothing would ever
+        # answer it once this widget stops responding to it.
         worker = self.worker
         if worker is not None and worker.isRunning():
             try:
                 worker.password_requested.disconnect(self._on_password_requested)
             except (RuntimeError, TypeError):
                 pass  # never connected, or already torn down
-            worker.wait(3000)
+            worker.request_cancel()
+        _finish_or_keep_alive(worker)
 
 
 class DocumentosTab(QWidget):
