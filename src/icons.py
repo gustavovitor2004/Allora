@@ -14,8 +14,10 @@ static SVG, it doesn't resolve CSS custom properties or inherited paint
 context, so each call renders its own fully-colored copy.
 """
 
-from PySide6.QtCore import QByteArray, QRectF, Qt
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPixmap
+from functools import lru_cache
+
+from PySide6.QtCore import QByteArray, Qt
+from PySide6.QtGui import QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
 
 PATHS = {
@@ -69,6 +71,13 @@ PATHS = {
 FILLED_ICONS = {"play"}
 
 
+# [FIX] Cached: every icon in the app is rebuilt from scratch (SVG string
+# -> QSvgRenderer -> QPainter -> QPixmap) on each call, and the call sites
+# ask for the same handful of (name, color, size) combinations over and
+# over - a theme switch alone re-renders every icon in every visible row.
+# The inputs fully determine the output and QIcon is only ever read (never
+# mutated) here, so the results are safe to share.
+@lru_cache(maxsize=256)
 def make_icon(name: str, color: str, size: int = 18, stroke_width: float = 1.8) -> QIcon:
     """Render one of PATHS as a QIcon, stroked (or filled, for FILLED_ICONS)
     in the given CSS color. Rendered at 2x and given a device pixel ratio of
@@ -90,42 +99,4 @@ def make_icon(name: str, color: str, size: int = 18, stroke_width: float = 1.8) 
     renderer.render(painter)
     painter.end()
     pixmap.setDevicePixelRatio(2.0)
-    return QIcon(pixmap)
-
-
-def make_badge(name: str, bg_color: str, icon_color: str, diameter: int = 34, icon_size: int = 17) -> QIcon:
-    """A filled rounded-square badge with a centered icon - used for the app
-    logo mark and per-category thumbnails (file-type icon in a tinted box).
-    Renders the background and the icon's SVG into the same physical-pixel
-    canvas in one pass (rather than compositing two separately-scaled
-    QIcon pixmaps), so there's no risk of the icon looking soft from a
-    mismatched device pixel ratio between the two."""
-    scale = 2
-    side = diameter * scale
-    pixmap = QPixmap(side, side)
-    pixmap.fill(Qt.transparent)
-
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.Antialiasing)
-    painter.setPen(Qt.NoPen)
-    painter.setBrush(QBrush(QColor(bg_color)))
-    radius = side * 0.28
-    painter.drawRoundedRect(QRectF(0, 0, side, side), radius, radius)
-
-    inner = PATHS[name]
-    if name in FILLED_ICONS:
-        svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="{icon_color}" stroke="none">{inner}</svg>'
-    else:
-        svg = (
-            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" '
-            f'stroke="{icon_color}" stroke-width="1.9" stroke-linecap="round" '
-            f'stroke-linejoin="round">{inner}</svg>'
-        )
-    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    icon_side = icon_size * scale
-    offset = (side - icon_side) / 2
-    renderer.render(painter, QRectF(offset, offset, icon_side, icon_side))
-    painter.end()
-
-    pixmap.setDevicePixelRatio(float(scale))
     return QIcon(pixmap)

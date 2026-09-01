@@ -58,9 +58,35 @@ class Settings:
         merged = defaults.to_dict()
         if isinstance(data, dict):
             for key in merged:
-                if key in data:
-                    merged[key] = data[key]
+                if key not in data:
+                    continue
+                value = data[key]
+                # [FIX] Type-check against the default before accepting a
+                # value. Dataclasses don't validate, so a hand-edited or
+                # partially-written config.json used to flow straight
+                # through: `"output_dir": null` reached os.makedirs(None)
+                # and raised TypeError (not the OSError load_settings
+                # guards against), so the app refused to start at all; a
+                # non-int max_simultaneous instead killed the download
+                # dispatcher thread on its first arithmetic. Anything of
+                # the wrong type now silently falls back to its default.
+                expected = type(merged[key])
+                if expected is bool:
+                    if not isinstance(value, bool):
+                        continue
+                elif expected is int:
+                    # bool is a subclass of int - reject it explicitly.
+                    if not isinstance(value, int) or isinstance(value, bool):
+                        continue
+                elif expected is str:
+                    if not isinstance(value, str):
+                        continue
+                merged[key] = value
         merged["theme"] = normalize_theme_name(merged["theme"])
+        # A zero/negative worker count would stall every queue forever
+        # (free_slots never goes above 0); clamp to the range the
+        # Configurações spinbox itself allows.
+        merged["max_simultaneous"] = max(1, min(3, merged["max_simultaneous"]))
         return Settings(**merged)
 
 
@@ -106,8 +132,20 @@ def load_settings() -> Settings:
 def save_settings(settings: Settings) -> None:
     try:
         os.makedirs(APP_DIR, exist_ok=True)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        # [FIX] Write-then-rename instead of writing over config.json in
+        # place. Opening the real file with "w" truncated it *before* the
+        # new contents were written, so anything interrupting the write
+        # (crash, kill, power loss) left a truncated file behind - and
+        # load_settings() treats unparseable JSON as "corrupt, reset to
+        # defaults", silently wiping every setting the user had. os.replace
+        # is atomic on Windows and POSIX alike, so config.json is now
+        # always either the old file or the complete new one.
+        tmp_path = CONFIG_PATH.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(settings.to_dict(), f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, CONFIG_PATH)
     except OSError as exc:
         # Config is not writable - non-fatal, the app can keep running with
         # in-memory settings for this session. Encode defensively: a GUI
