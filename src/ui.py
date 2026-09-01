@@ -119,9 +119,15 @@ def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark
         return
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
-    btn.setToolTip(
-        {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover", "copy": "Copiar link"}.get(name, "")
-    )
+    label = {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover", "copy": "Copiar link"}.get(name, "")
+    btn.setToolTip(label)
+    # [AUDIT] Section 6 (design) - idea 6 (scoped to accessible names, not
+    # new keyboard shortcuts - those need product decisions about which
+    # keys to bind and risk conflicting with IME/OS shortcuts, which this
+    # app has already been bitten by once this session). A tooltip alone
+    # isn't reliably exposed to screen readers by every platform's
+    # accessibility stack; an explicit accessible name is.
+    btn.setAccessibleName(label)
     btn.setProperty("_iconCacheKey", cache_key)
 
 
@@ -317,6 +323,11 @@ class QueueItemWidget(QFrame):
         # relevant - only the Erro/Indisponível branch turns these back on.
         self.copy_btn.setVisible(False)
         self.remove_btn.setVisible(False)
+        # [AUDIT] Section 6 (design) - idea 3: clear any error tooltip from
+        # a previous Erro state too - otherwise it would linger (still
+        # showing the old error text on hover) after a retry moved this
+        # same row back to Baixando/Concluído/etc.
+        self.detail_label.setToolTip("")
 
         status = item.status
         if status == DownloadItem.STATUS_DOWNLOADING:
@@ -347,6 +358,12 @@ class QueueItemWidget(QFrame):
             if item.error_message:
                 text += f" — {item.error_message[:80]}"
             self.detail_label.setText(text)
+            # [AUDIT] Section 6 (design) - idea 3: the row only ever showed
+            # the first 80 characters of the error, with no way to see the
+            # rest - useful for a quick glance, not enough to actually
+            # debug or report a problem. The full message is now one hover
+            # away instead of needing a new button/expandable panel.
+            self.detail_label.setToolTip(item.error_message or "")
             set_pill(self.pill, "Erro", "accent")
             set_action_icon(self.action_btn, "retry", self.theme_name)
             self.action_btn.setEnabled(True)
@@ -540,6 +557,10 @@ class ConversionItemWidget(QFrame):
 
         self.progress_bar.setValue(int(item.progress))
         self.format_combo.setEnabled(item.status == ConversionItem.STATUS_WAITING and item.category is not None)
+        # [AUDIT] Section 6 (design) - idea 3: clear any stale error tooltip
+        # from a previous Erro state - see the identical reset in
+        # QueueItemWidget.refresh().
+        self.pill.setToolTip("")
 
         status = item.status
         if status == ConversionItem.STATUS_CONVERTING:
@@ -556,6 +577,11 @@ class ConversionItemWidget(QFrame):
             label = "Erro" if status == ConversionItem.STATUS_ERROR else "Não suportado"
             if item.error_message:
                 label += f" — {item.error_message[:80]}"
+                # [AUDIT] Section 6 (design) - idea 3: the pill only ever
+                # showed the first 80 characters, with no way to see the
+                # rest. Full message one hover away instead of a new
+                # button/expandable panel.
+                self.pill.setToolTip(item.error_message)
             set_pill(self.pill, label, "accent" if status == ConversionItem.STATUS_ERROR else "neutral")
             set_action_icon(
                 self.action_btn,
@@ -663,6 +689,7 @@ class SettingsDialog(QDialog):
         self._close_btn.setFixedSize(32, 28)
         self._close_btn.setIconSize(QSize(12, 12))
         self._close_btn.setToolTip("Fechar")
+        self._close_btn.setAccessibleName("Fechar")
         self._close_btn.clicked.connect(self.reject)
         layout.addWidget(self._close_btn)
 
@@ -735,6 +762,8 @@ class SettingsDialog(QDialog):
         self._ffmpeg_browse_btn.setObjectName("Secondary")
         self._ffmpeg_browse_btn.setFixedWidth(40)
         self._ffmpeg_browse_btn.setMinimumHeight(34)
+        self._ffmpeg_browse_btn.setToolTip("Escolher executável do ffmpeg")
+        self._ffmpeg_browse_btn.setAccessibleName("Escolher executável do ffmpeg")
         self._ffmpeg_browse_btn.clicked.connect(self._choose_ffmpeg)
         grid.addWidget(self._ffmpeg_browse_btn, row, 2)
         row += 1
@@ -744,6 +773,16 @@ class SettingsDialog(QDialog):
         self.ffmpeg_status_label = QLabel()
         outer.addWidget(self.ffmpeg_status_label)
         self._refresh_ffmpeg_status()
+
+        # [AUDIT] Section 6 (design) - idea 5: ffmpeg gets validated (above),
+        # but a stale output folder (a path from a previously-saved config
+        # that's since been deleted or unplugged, left untouched in this
+        # dialog) silently accepted a setting that would fail the first
+        # time something actually tried to write there. See accept() below.
+        self.folder_error_label = QLabel("")
+        self.folder_error_label.setObjectName("ErrorLabel")
+        self.folder_error_label.setVisible(False)
+        outer.addWidget(self.folder_error_label)
 
         outer.addStretch(1)
         self._refresh_field_icons()
@@ -868,6 +907,30 @@ class SettingsDialog(QDialog):
             if self._main_window is not None and hasattr(self._main_window, "apply_theme"):
                 self._main_window.apply_theme(self._original_theme)
         super().reject()
+
+    def accept(self):
+        # [AUDIT] Section 6 (design) - idea 5: the output folder shown here
+        # can be a path from a previously-saved config that's since been
+        # deleted or unplugged (a removable drive, say) - if the user
+        # leaves it untouched and clicks Salvar, that invalid setting used
+        # to be accepted silently and would only fail the first time a
+        # download actually tried to write there. Validated the same way
+        # the rest of the app already treats an output folder: try to
+        # create it (a no-op if it already exists), and if that's not
+        # possible, keep the dialog open with an inline error instead of
+        # closing on a setting that can't actually be used.
+        folder = self.folder_edit.text().strip()
+        if folder:
+            try:
+                os.makedirs(folder, exist_ok=True)
+            except OSError as exc:
+                self.folder_error_label.setText(
+                    f"Não foi possível usar esta pasta de destino: {exc}"
+                )
+                self.folder_error_label.setVisible(True)
+                return
+        self.folder_error_label.setVisible(False)
+        super().accept()
 
     def apply_to(self, settings: Settings):
         settings.output_dir = self.folder_edit.text().strip() or settings.output_dir
@@ -1105,6 +1168,7 @@ class MainWindow(QMainWindow):
         about_btn.setFixedWidth(36)
         about_btn.setIconSize(QSize(16, 16))
         about_btn.setToolTip("Sobre")
+        about_btn.setAccessibleName("Sobre")
         about_btn.clicked.connect(self.show_about)
         self._icon_buttons.append((about_btn, "help-circle", "text_secondary"))
         layout.addWidget(about_btn)
@@ -1122,6 +1186,7 @@ class MainWindow(QMainWindow):
         self.min_btn.setFixedSize(32, 28)
         self.min_btn.setIconSize(QSize(12, 12))
         self.min_btn.setToolTip("Minimizar")
+        self.min_btn.setAccessibleName("Minimizar")
         self.min_btn.clicked.connect(self.showMinimized)
         layout.addWidget(self.min_btn)
 
@@ -1134,6 +1199,7 @@ class MainWindow(QMainWindow):
         self.maximize_btn.setFixedSize(32, 28)
         self.maximize_btn.setIconSize(QSize(12, 12))
         self.maximize_btn.setToolTip("Maximizar")
+        self.maximize_btn.setAccessibleName("Maximizar")
         self.maximize_btn.clicked.connect(self._toggle_maximize)
         layout.addWidget(self.maximize_btn)
 
@@ -1143,6 +1209,7 @@ class MainWindow(QMainWindow):
         self.close_btn.setFixedSize(32, 28)
         self.close_btn.setIconSize(QSize(12, 12))
         self.close_btn.setToolTip("Fechar")
+        self.close_btn.setAccessibleName("Fechar")
         self.close_btn.clicked.connect(self.close)
         layout.addWidget(self.close_btn)
 
@@ -1167,7 +1234,9 @@ class MainWindow(QMainWindow):
         name = "win-restore" if self._is_pseudo_maximized else "win-maximize"
         color = theme_colors(self.settings.theme)["text_secondary"]
         self.maximize_btn.setIcon(make_icon(name, color, size=12))
-        self.maximize_btn.setToolTip("Restaurar" if self._is_pseudo_maximized else "Maximizar")
+        label = "Restaurar" if self._is_pseudo_maximized else "Maximizar"
+        self.maximize_btn.setToolTip(label)
+        self.maximize_btn.setAccessibleName(label)
 
     def _build_queue_footer(self, start_text, start_icon, on_start, on_pause, on_clear):
         """Shared skeleton for the Downloads/Converter tabs' bottom control
@@ -1435,7 +1504,16 @@ class MainWindow(QMainWindow):
             self.conversion_manager.pause()
             self.conv_pause_btn.setText(" Retomar")
             set_action_icon(self.conv_pause_btn, "play", self.settings.theme)
-            self.conv_status_label.setText("Pausado (conversões em andamento serão concluídas).")
+            # [AUDIT] Section 6 (design) - idea 2: "Pausar" deliberately lets
+            # in-flight jobs finish rather than stopping them - this used to
+            # just say that in the abstract, with no visibility into how
+            # many jobs that actually applies to. A snapshot at the moment
+            # Pausar was clicked, not a live counter.
+            active = self.conversion_manager.active_count()
+            waiting = self.conversion_manager.waiting_count()
+            self.conv_status_label.setText(
+                f"Pausado — {active} em andamento, {waiting} aguardando."
+            )
 
     def _on_conv_item_added(self, item_id: int):
         item = self.conversion_manager.get_item(item_id)
@@ -1512,7 +1590,13 @@ class MainWindow(QMainWindow):
             self.manager.pause()
             self.pause_btn.setText(" Retomar")
             set_action_icon(self.pause_btn, "play", self.settings.theme)
-            self.status_bar_label.setText("Pausado (downloads em andamento serão concluídos).")
+            # [AUDIT] Section 6 (design) - idea 2: same wording as the
+            # conversion tab's on_pause_conversions() - see that comment.
+            active = self.manager.active_count()
+            waiting = self.manager.waiting_count()
+            self.status_bar_label.setText(
+                f"Pausado — {active} em andamento, {waiting} aguardando."
+            )
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
