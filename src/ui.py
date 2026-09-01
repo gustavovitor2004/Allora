@@ -12,7 +12,10 @@ The GUI never touches yt-dlp directly - all of that goes through
 `downloader.DownloadManager`, which emits Qt signals that this module
 listens to. Because DownloadManager's worker threads emit those signals,
 and Qt auto-queues cross-thread signal/slot connections, none of the code
-below has to worry about thread safety.
+below has to worry about thread safety. The one thing it must NOT do is
+mutate a manager's `items`/`order` directly - go through the manager's own
+locked methods (add_url/remove_item/...), since its dispatcher thread
+iterates those under a lock this thread doesn't hold.
 
 Theming is entirely centralized in `theme.py` - this module never sets an
 inline stylesheet for color/appearance purposes. Every widget that needs to
@@ -83,8 +86,13 @@ def set_pill(pill: QLabel, text: str, variant: str) -> None:
     (done), 'neutral' (waiting/cancelled) - matches theme.py's Pill
     variants."""
     pill.setText(text)
-    pill.setProperty("variant", variant)
-    repolish(pill)
+    # [FIX] repolish() is a full unpolish+polish style recomputation, and
+    # this ran on every progress tick (several times a second, per active
+    # row, for the whole length of a download) even though the variant
+    # almost never changes between ticks. Only recompute on a real change.
+    if pill.property("variant") != variant:
+        pill.setProperty("variant", variant)
+        repolish(pill)
 
 
 def make_row_action_button(on_click, theme_name: str = "classic_dark") -> QPushButton:
@@ -364,9 +372,15 @@ class QueueItemWidget(QFrame):
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
 
+        # [FIX] Same redundant-repolish fix as set_pill(): this reassigned
+        # the objectName and forced a full style recomputation on every
+        # progress tick, even though it only ever flips when the item
+        # enters/leaves an error state.
         is_error = status in (DownloadItem.STATUS_ERROR, DownloadItem.STATUS_UNAVAILABLE)
-        self.detail_label.setObjectName("ErrorLabel" if is_error else "Dim")
-        repolish(self.detail_label)
+        wanted_name = "ErrorLabel" if is_error else "Dim"
+        if self.detail_label.objectName() != wanted_name:
+            self.detail_label.setObjectName(wanted_name)
+            repolish(self.detail_label)
 
     def _on_action_clicked(self):
         item = self.manager.get_item(self.item_id)
@@ -388,10 +402,11 @@ class QueueItemWidget(QFrame):
         self._remove_self()
 
     def _remove_self(self):
-        self.manager.items.pop(self.item_id, None)
-        if self.item_id in self.manager.order:
-            self.manager.order.remove(self.item_id)
-        self.manager.item_removed.emit(self.item_id)
+        # [FIX] Was popping manager.items / manager.order directly from the
+        # GUI thread without the manager's lock, racing the dispatcher
+        # thread (KeyError -> dead dispatcher -> queue frozen). remove_item()
+        # does both under the lock and emits the signal itself.
+        self.manager.remove_item(self.item_id)
 
 
 class DropZone(QFrame):
@@ -568,10 +583,8 @@ class ConversionItemWidget(QFrame):
             self.manager.retry_item(self.item_id)
         elif item.status in (ConversionItem.STATUS_DONE, ConversionItem.STATUS_CANCELLED,
                               ConversionItem.STATUS_UNSUPPORTED):
-            self.manager.items.pop(self.item_id, None)
-            if self.item_id in self.manager.order:
-                self.manager.order.remove(self.item_id)
-            self.manager.item_removed.emit(self.item_id)
+            # [FIX] Same unlocked-mutation race as QueueItemWidget._remove_self.
+            self.manager.remove_item(self.item_id)
         else:
             self.manager.cancel_item(self.item_id)
 
@@ -1512,6 +1525,13 @@ class MainWindow(QMainWindow):
             # re-applying here is just cheap insurance that the persisted
             # settings.theme and the on-screen theme can never drift apart.
             self.apply_theme(self.settings.theme)
+        # [FIX] Memory leak: the dialog is parented to this window, so Qt
+        # kept every instance alive for the lifetime of the app - one more
+        # orphaned SettingsDialog (with all its widgets and baked icons)
+        # accumulating on MainWindow every single time the user opened
+        # Configurações. Letting the local name go out of scope does NOT
+        # free it; only the parent dropping it does.
+        dialog.deleteLater()
 
     def show_about(self):
         QMessageBox.information(
@@ -1536,10 +1556,11 @@ class MainWindow(QMainWindow):
     # Theme
     # ------------------------------------------------------------------
 
-    def set_theme(self, theme_name: str):
-        self.settings.theme = theme_name
-        save_settings(self.settings)
-        self.apply_theme(theme_name)
+    # [FIX] MainWindow.set_theme() removed as dead code - nothing called it.
+    # It was the entry point for the old header "Tema" button; since the
+    # picker moved into Configurações, theme changes go through
+    # SettingsDialog (live preview via apply_theme, persisted by
+    # open_settings) and never through here.
 
     def apply_theme(self, theme_name: str):
         set_app_theme(QApplication.instance(), theme_name)
@@ -1680,4 +1701,9 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         self.manager.shutdown()
         self.conversion_manager.shutdown()
+        # [FIX] The Documentos tab runs its own QThreads (scanner + document
+        # conversion) that nothing was stopping here - closing the app
+        # mid-scan tore down a live QThread, which Qt turns into an abort
+        # rather than a clean exit.
+        self.documentos_tab.shutdown()
         super().closeEvent(event)
