@@ -16,6 +16,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 from urllib.parse import urlparse
 
 
@@ -128,11 +129,31 @@ def no_window_flags():
     return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
+# [AUDIT] Section 5 - MEDIUM: `ffmpeg -version` used to be re-run as a fresh
+# subprocess every time this is called - at startup, every time Configurações
+# opens, and before every conversion job. Cached here by (path, mtime): the
+# same path with an unchanged mtime returns the cached result instead of
+# spawning another process; a different mtime (the binary was reinstalled or
+# replaced) or a different path (the user picked a new custom path in
+# Configurações) naturally misses the cache and re-checks for real.
+_binary_check_cache = {}
+
+
 def binary_is_working(path: str, version_flag: str = "-version") -> bool:
     """Actually try to run `<path> <version_flag>` to confirm it's a real,
     executable binary rather than just a path that happens to exist."""
     if not path:
         return False
+
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+
+    cached = _binary_check_cache.get(path)
+    if cached is not None and cached[0] == mtime:
+        return cached[1]
+
     try:
         proc = subprocess.run(
             [path, version_flag],
@@ -140,9 +161,12 @@ def binary_is_working(path: str, version_flag: str = "-version") -> bool:
             timeout=5,
             creationflags=no_window_flags(),
         )
-        return proc.returncode == 0
+        result = proc.returncode == 0
     except Exception:
-        return False
+        result = False
+
+    _binary_check_cache[path] = (mtime, result)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -174,10 +198,11 @@ def find_ffmpeg(custom_path: str = "") -> str:
             if os.path.isfile(winget_shim):
                 return winget_shim
 
-        # Allora.bat downloads a portable ffmpeg into tools/ffmpeg on
-        # first run when it isn't already on PATH - never registered
-        # system-wide, so this fixed, predictable location is the only way
-        # the app can find it.
+        # [AUDIT] Section 4: a portable ffmpeg placed by hand (or by the
+        # distributor) into tools/ffmpeg, next to the app, when it isn't
+        # already on PATH - never registered system-wide, so this fixed,
+        # predictable location is the only way the app can find it. (No
+        # installer script does this automatically; see startup_check.py.)
         bundled = os.path.join(project_root(), "tools", "ffmpeg", "ffmpeg.exe")
         if os.path.isfile(bundled):
             return bundled
@@ -209,9 +234,8 @@ def find_poppler_bin_dir(custom_path: str = "") -> str:
         return os.path.dirname(found)
 
     if os.name == "nt":
-        # Same idea as find_ffmpeg()'s tools/ffmpeg fallback: Allora.bat
-        # downloads a portable Poppler into tools/poppler when it isn't
-        # already on PATH.
+        # Same idea as find_ffmpeg()'s tools/ffmpeg fallback: a portable
+        # Poppler placed into tools/poppler when it isn't already on PATH.
         bundled = os.path.join(project_root(), "tools", "poppler", pdftoppm_name)
         if os.path.isfile(bundled):
             return os.path.dirname(bundled)
@@ -264,17 +288,44 @@ def safe_filename(name: str) -> str:
     return name.strip()[:150] or "video"
 
 
+# [AUDIT] Section 1 - MEDIUM: unique_path() used to only check
+# os.path.exists() with no reservation - two conversions racing to pick a
+# name at nearly the same moment (e.g. two queued jobs that both source
+# from a same-named file, or two tabs converting at once) could both land
+# on the same candidate before either had actually created it; whichever
+# finished writing second silently overwrote the other's output (most
+# writers here, including ffmpeg with -y, happily truncate an existing
+# file). Names are now reserved in-process the moment they're handed out,
+# under a lock, so a second caller racing the first is guaranteed to see
+# the reservation and move on to the next candidate - not just an
+# unwritten-but-about-to-collide path.
+#
+# This is an in-memory, per-application-lifetime reservation, not a
+# filesystem one: it doesn't touch disk (several callers check
+# os.path.exists(out_path) afterward as their own success signal, which a
+# pre-created placeholder file would have broken), and a name whose
+# conversion later fails or is cancelled stays reserved for the rest of
+# this run - a minor cosmetic cost (a subsequent retry with the same base
+# name gets " (1)" instead of reusing the original), traded for actually
+# preventing the silent overwrite.
+_reserved_paths_lock = threading.Lock()
+_reserved_paths = set()
+
+
 def unique_path(directory: str, base_name: str, ext: str) -> str:
     """Build a path for `<directory>/<base_name>.<ext>`, appending \" (1)\",
-    \" (2)\", etc. until it doesn't collide with an existing file. Shared by
-    every module that writes converted/exported output (the top-level
-    converter.py, documentos/converter.py)."""
-    candidate = os.path.join(directory, f"{base_name}.{ext}")
-    counter = 1
-    while os.path.exists(candidate):
-        candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
-        counter += 1
-    return candidate
+    \" (2)\", etc. until it doesn't collide with an existing file or an
+    in-process reservation from a concurrent caller. Shared by every module
+    that writes converted/exported output (the top-level converter.py,
+    documentos/converter.py)."""
+    with _reserved_paths_lock:
+        candidate = os.path.join(directory, f"{base_name}.{ext}")
+        counter = 1
+        while os.path.exists(candidate) or candidate in _reserved_paths:
+            candidate = os.path.join(directory, f"{base_name} ({counter}).{ext}")
+            counter += 1
+        _reserved_paths.add(candidate)
+        return candidate
 
 
 def height_to_label(height) -> str:
@@ -292,3 +343,33 @@ def height_to_label(height) -> str:
     if height >= 360:
         return "360p"
     return f"{height}p"
+
+
+# ---------------------------------------------------------------------------
+# [AUDIT] Section 3 - duplicate code: shared by the Documentos tab's two
+# image-handling modules (documentos/scanner_engine.py,
+# documentos/converter.py), which used to each carry their own identical
+# copy. Not the same list as the top-level converter.py's IMAGE_FORMATS,
+# which covers a different, broader set of ffmpeg-convertible formats
+# (includes gif, for one) for a different feature - this one is
+# specifically "image formats the Documentos scanner/converter pipeline
+# accepts", so it stays its own constant rather than being unified with
+# that one.
+# ---------------------------------------------------------------------------
+
+IMAGE_EXTS = ["jpg", "jpeg", "png", "bmp", "webp", "tiff"]
+
+
+def fit_to_page(image_size, page_size):
+    """Scale an image to fit centered inside a page, preserving aspect
+    ratio. Returns (draw_width, draw_height, x, y). Shared by
+    documentos/converter.py (image -> PDF) and documentos/scanner_engine.py
+    (scan result -> PDF), which used to each carry an identical copy of
+    this exact formula."""
+    img_w, img_h = image_size
+    page_w, page_h = page_size
+    scale = min(page_w / img_w, page_h / img_h)
+    draw_w, draw_h = img_w * scale, img_h * scale
+    x = (page_w - draw_w) / 2
+    y = (page_h - draw_h) / 2
+    return draw_w, draw_h, x, y

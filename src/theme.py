@@ -696,6 +696,20 @@ def build_stylesheet(theme_name: str) -> str:
         background-color: {c['bg_surface2']};
         border-radius: {max(r_btn - 2, 0)}px;
     }}
+
+    /* --- Document scanner result preview ------------------------------------ */
+    /* [AUDIT] Section 5 - performance/theme: this used to be a hardcoded
+       inline setStyleSheet("background-color: rgba(255,255,255,15); ...")
+       on the widget itself in tab_documentos.py - a fixed white-at-6%-alpha
+       wash that reads as a faint highlight on a dark theme but is nearly
+       invisible (or the wrong contrast direction entirely) on a light one.
+       Routed through the theme system like every other surface in the app,
+       via bg_surface2 (the same subtle "recessed panel" tone QLabel#Thumb
+       above already uses) so it's correct in both. */
+    QLabel#ResultPreview {{
+        background-color: {c['bg_surface2']};
+        border-radius: 6px;
+    }}
     """
 
 
