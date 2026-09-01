@@ -16,6 +16,8 @@ caches style results per widget and won't notice the property change on its
 own.
 """
 
+from functools import lru_cache
+
 from PySide6.QtWidgets import QApplication
 
 # ---------------------------------------------------------------------------
@@ -258,19 +260,14 @@ def normalize_theme_name(name: str) -> str:
     name = _LEGACY_ALIASES.get(name, name)
     return name if name in THEMES else DEFAULT_THEME
 
-# Status values understood by the QLabel#Pill[status=...] selectors below.
-# Every queue/file-list row widget sets one of these via
-# `widget.setProperty("status", ...)` + `repolish(widget)`.
-STATUS_WAITING = "waiting"
-STATUS_ACTIVE = "active"
-STATUS_DONE = "done"
-STATUS_ERROR = "error"
 
-
-def theme_names() -> list:
-    """Ordered (name, label) pairs for populating a theme picker."""
-    return [(name, t["label"]) for name, t in THEMES.items()]
-
+# [FIX] Removed as dead code: the STATUS_WAITING/ACTIVE/DONE/ERROR
+# constants and theme_names(). Nothing imported the constants (the live
+# values are the string literals in
+# documentos/tab_documentos.DocConversionItemWidget._CARD_STATUS, which is
+# the duplication worth collapsing if this ever comes back), and
+# theme_names() was superseded by base_theme_names() when the theme picker
+# moved into Configurações.
 
 # Several themes ship a matching light/dark pair under separate THEMES keys
 # (e.g. "classic_dark"/"classic_light"). The Settings window's theme picker
@@ -331,6 +328,12 @@ def theme_colors(theme_name: str) -> dict:
     return THEMES[normalize_theme_name(theme_name)]
 
 
+# [FIX] Cached: this rebuilds a ~300-line f-string from scratch on every
+# call, and apply_theme() calls it on startup and again on every single
+# keystroke-speed change of the Configurações theme picker (which
+# live-previews). The output depends only on theme_name, so it's safe to
+# memoize - the gallery has a fixed, small number of themes.
+@lru_cache(maxsize=32)
 def build_stylesheet(theme_name: str) -> str:
     c = THEMES[normalize_theme_name(theme_name)]
     bw = c["border_width"]
