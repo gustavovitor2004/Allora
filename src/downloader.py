@@ -23,6 +23,9 @@ Design notes
   supported: we raise KeyboardInterrupt from inside the progress hook,
   which is the standard, reliable way to make yt-dlp abort a download
   cleanly mid-transfer.
+- Mutating `items`/`order` must always happen under `_lock` (see
+  remove_item) - the dispatcher thread iterates both, and an inconsistent
+  pair between them used to kill it with a KeyError.
 """
 
 import itertools
@@ -213,9 +216,21 @@ class DownloadManager(QObject):
     def get_item(self, item_id: int):
         return self.items.get(item_id)
 
-    def get_all_items(self):
+    # [FIX] New: removing an item used to be done by the UI reaching into
+    # manager.items/manager.order directly, from the GUI thread, WITHOUT
+    # taking this lock - while _dispatch_loop was iterating both under it.
+    # Between the caller's items.pop() and order.remove() there was a window
+    # where `order` still held an id that `items` no longer had, and the
+    # dispatcher's `self.items[i]` raised KeyError, killing the dispatcher
+    # thread outright (queue silently dead for the rest of the session).
+    # Doing it here, under the lock, makes the pair atomic.
+    def remove_item(self, item_id: int) -> None:
         with self._lock:
-            return [self.items[i] for i in self.order if i in self.items]
+            existed = self.items.pop(item_id, None) is not None
+            if item_id in self.order:
+                self.order.remove(item_id)
+        if existed:
+            self.item_removed.emit(item_id)
 
     def start_all(self):
         self.running = True
@@ -335,9 +350,15 @@ class DownloadManager(QObject):
                 free_slots = max(0, self.settings.max_simultaneous - len(self.active_threads))
                 if free_slots <= 0:
                     continue
+                # [FIX] `if i in self.items` guard added - self.order can
+                # briefly outlive an entry in self.items (see remove_item),
+                # and the unguarded self.items[i] raised KeyError here,
+                # killing this dispatcher thread. The same guard was already
+                # present in _finish_item(); it was simply missed here.
                 candidates = [
                     self.items[i] for i in self.order
-                    if self.items[i].id not in self.active_threads
+                    if i in self.items
+                    and self.items[i].id not in self.active_threads
                     and self.items[i].status == DownloadItem.STATUS_WAITING
                 ]
                 to_start = candidates[:free_slots]
@@ -353,8 +374,10 @@ class DownloadManager(QObject):
             if not to_start:
                 with self._lock:
                     any_active = bool(self.active_threads)
+                    # [FIX] Same missing `if i in self.items` guard as above.
                     any_waiting = any(
                         self.items[i].status == DownloadItem.STATUS_WAITING for i in self.order
+                        if i in self.items
                     )
                 if not any_active and not any_waiting and self.running:
                     self.queue_idle.emit()
