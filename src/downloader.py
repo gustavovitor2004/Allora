@@ -34,8 +34,8 @@ import threading
 import time
 
 import yt_dlp
-from PySide6.QtCore import QObject, Signal
 
+from queue_manager import QueueManager
 from settings import Settings
 from utils import (
     detect_platform, ffmpeg_is_working, find_ffmpeg, format_bytes_per_sec,
@@ -179,26 +179,33 @@ class DownloadItem:
         self.cancel_event = threading.Event()
 
 
-class DownloadManager(QObject):
-    item_added = Signal(int)
-    item_updated = Signal(int)
-    item_removed = Signal(int)
-    queue_idle = Signal()          # emitted whenever nothing is downloading/waiting
-    ffmpeg_missing = Signal()
+class DownloadManager(QueueManager):
+    """[AUDIT] Section 3 - duplicate code: item registration/removal,
+    pause/start, clear_completed, shutdown, the dispatcher loop and
+    _finish_item are now inherited from QueueManager (queue_manager.py) -
+    see that module's docstring for why. Everything below is what's
+    genuinely specific to downloading: add_url, cancel_item (extra
+    in-flight statuses beyond a single "active" one), retry_item, metadata
+    prefetching, and the actual yt-dlp worker."""
 
     def __init__(self, settings: Settings):
-        super().__init__()
-        self.settings = settings
-        self.items: dict[int, DownloadItem] = {}
-        self.order: list[int] = []
-        self._lock = threading.RLock()
-        self.active_threads: dict[int, threading.Thread] = {}
-        self.running = False   # True once the user has pressed "Iniciar tudo"
-        self.paused = False
-        self._shutdown = False
+        super().__init__(settings)
 
-        self._dispatcher = threading.Thread(target=self._dispatch_loop, daemon=True)
-        self._dispatcher.start()
+    # ------------------------------------------------------------------
+    # QueueManager hooks
+    # ------------------------------------------------------------------
+
+    def _waiting_status(self):
+        return DownloadItem.STATUS_WAITING
+
+    def _done_statuses(self):
+        return (DownloadItem.STATUS_DONE, DownloadItem.STATUS_CANCELLED)
+
+    def _start_item(self, item):
+        item.status = DownloadItem.STATUS_DOWNLOADING
+
+    def _make_worker_thread(self, item):
+        return threading.Thread(target=self._download_worker, args=(item,), daemon=True)
 
     # ------------------------------------------------------------------
     # Queue management
@@ -212,32 +219,6 @@ class DownloadManager(QObject):
         self.item_added.emit(item.id)
         threading.Thread(target=self._fetch_metadata, args=(item,), daemon=True).start()
         return item
-
-    def get_item(self, item_id: int):
-        return self.items.get(item_id)
-
-    # [FIX] New: removing an item used to be done by the UI reaching into
-    # manager.items/manager.order directly, from the GUI thread, WITHOUT
-    # taking this lock - while _dispatch_loop was iterating both under it.
-    # Between the caller's items.pop() and order.remove() there was a window
-    # where `order` still held an id that `items` no longer had, and the
-    # dispatcher's `self.items[i]` raised KeyError, killing the dispatcher
-    # thread outright (queue silently dead for the rest of the session).
-    # Doing it here, under the lock, makes the pair atomic.
-    def remove_item(self, item_id: int) -> None:
-        with self._lock:
-            existed = self.items.pop(item_id, None) is not None
-            if item_id in self.order:
-                self.order.remove(item_id)
-        if existed:
-            self.item_removed.emit(item_id)
-
-    def start_all(self):
-        self.running = True
-        self.paused = False
-
-    def pause(self):
-        self.paused = True
 
     def cancel_item(self, item_id: int):
         item = self.items.get(item_id)
@@ -261,24 +242,6 @@ class DownloadManager(QObject):
         item.eta_text = ""
         item.cancel_event = threading.Event()
         self.item_updated.emit(item.id)
-
-    def clear_completed(self):
-        with self._lock:
-            to_remove = [
-                i for i in self.order
-                if self.items[i].status in (DownloadItem.STATUS_DONE, DownloadItem.STATUS_CANCELLED)
-            ]
-            for i in to_remove:
-                del self.items[i]
-                self.order.remove(i)
-        for i in to_remove:
-            self.item_removed.emit(i)
-
-    def shutdown(self):
-        self._shutdown = True
-        with self._lock:
-            for item in self.items.values():
-                item.cancel_event.set()
 
     # ------------------------------------------------------------------
     # Metadata pre-fetch (title + thumbnail), runs off the GUI thread
@@ -338,51 +301,6 @@ class DownloadManager(QObject):
             self.item_updated.emit(item.id)
 
     # ------------------------------------------------------------------
-    # Dispatcher
-    # ------------------------------------------------------------------
-
-    def _dispatch_loop(self):
-        while not self._shutdown:
-            time.sleep(0.4)
-            if not self.running or self.paused:
-                continue
-            with self._lock:
-                free_slots = max(0, self.settings.max_simultaneous - len(self.active_threads))
-                if free_slots <= 0:
-                    continue
-                # [FIX] `if i in self.items` guard added - self.order can
-                # briefly outlive an entry in self.items (see remove_item),
-                # and the unguarded self.items[i] raised KeyError here,
-                # killing this dispatcher thread. The same guard was already
-                # present in _finish_item(); it was simply missed here.
-                candidates = [
-                    self.items[i] for i in self.order
-                    if i in self.items
-                    and self.items[i].id not in self.active_threads
-                    and self.items[i].status == DownloadItem.STATUS_WAITING
-                ]
-                to_start = candidates[:free_slots]
-                for item in to_start:
-                    item.status = DownloadItem.STATUS_DOWNLOADING
-                    t = threading.Thread(target=self._download_worker, args=(item,), daemon=True)
-                    self.active_threads[item.id] = t
-
-            for item in to_start:
-                self.item_updated.emit(item.id)
-                self.active_threads[item.id].start()
-
-            if not to_start:
-                with self._lock:
-                    any_active = bool(self.active_threads)
-                    # [FIX] Same missing `if i in self.items` guard as above.
-                    any_waiting = any(
-                        self.items[i].status == DownloadItem.STATUS_WAITING for i in self.order
-                        if i in self.items
-                    )
-                if not any_active and not any_waiting and self.running:
-                    self.queue_idle.emit()
-
-    # ------------------------------------------------------------------
     # Actual download
     # ------------------------------------------------------------------
 
@@ -430,17 +348,6 @@ class DownloadManager(QObject):
             self.item_updated.emit(item.id)
 
         self._finish_item(item)
-
-    def _finish_item(self, item: DownloadItem):
-        with self._lock:
-            self.active_threads.pop(item.id, None)
-            any_active = bool(self.active_threads)
-            any_waiting = any(
-                self.items[i].status == DownloadItem.STATUS_WAITING for i in self.order
-                if i in self.items
-            )
-        if not any_active and not any_waiting:
-            self.queue_idle.emit()
 
     def _run_ytdlp(self, item: DownloadItem):
         settings = self.settings
