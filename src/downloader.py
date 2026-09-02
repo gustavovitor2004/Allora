@@ -6,7 +6,7 @@ yt-dlp wrapper, download queue model and background threading.
 Design notes
 ------------
 - Each queue item is a `DownloadItem` (plain data holder + a threading.Event
-  used to signal cancellation into the yt-dlp progress hook).
+  that signals cancellation, plus a handle on the live yt-dlp process).
 - `DownloadManager` is a QObject so it can emit Qt signals from worker
   threads. PySide6 automatically marshals signal emissions from a non-GUI
   thread to the receiving (GUI) thread's event loop (queued connection),
@@ -17,29 +17,36 @@ Design notes
 - A single lightweight dispatcher thread decides when to start the next
   queued item, respecting the "max simultaneous downloads" setting and the
   paused/running flags.
+- yt-dlp is invoked as a SUBPROCESS, not imported as a library. It ships in
+  tools/ next to the .exe like ffmpeg and poppler do, so the user can run
+  `yt-dlp.exe -U` when a site changes its extractor instead of waiting for a
+  new Allora release - see find_yt_dlp() in utils.py. Everything the library
+  handed back as Python objects now arrives on stdout: --dump-single-json for
+  metadata, --progress-template for progress, --print after_move: for the
+  final path and resolved height.
 - True mid-stream pause of an active HTTP download is not something yt-dlp
   exposes, so "Pausar" stops the dispatcher from starting new items - any
-  downloads already in progress finish naturally. Cancellation *is* fully
-  supported: we raise KeyboardInterrupt from inside the progress hook,
-  which is the standard, reliable way to make yt-dlp abort a download
-  cleanly mid-transfer.
+  downloads already in progress finish naturally. Cancellation kills the
+  child process outright, which lands immediately; the old library path could
+  only raise KeyboardInterrupt from inside a progress hook and so had to wait
+  for the next callback to fire.
 - Mutating `items`/`order` must always happen under `_lock` (see
   remove_item) - the dispatcher thread iterates both, and an inconsistent
   pair between them used to kill it with a KeyError.
 """
 
 import itertools
+import json
 import os
+import subprocess
 import threading
 import time
-
-import yt_dlp
 
 from queue_manager import QueueManager
 from settings import Settings
 from utils import (
-    detect_platform, ffmpeg_is_working, find_ffmpeg, format_bytes_per_sec,
-    format_eta, height_to_label,
+    detect_platform, ffmpeg_is_working, find_ffmpeg, find_yt_dlp,
+    format_bytes_per_sec, format_eta, height_to_label, no_window_flags,
 )
 
 try:
@@ -88,28 +95,11 @@ UNAVAILABLE_MARKERS = (
 )
 
 
-class _QuietLogger:
-    """A no-op yt-dlp logger. "quiet"/"no_warnings" suppress most output,
-    but not every code path in yt-dlp (or a library it calls into, e.g.
-    urllib3) checks those flags before logging - some just call straight
-    into whatever `logger` was configured. Passing this instead of leaving
-    yt-dlp's default logger installed means those calls always land on a
-    method that does nothing, rather than one that ends up writing to
-    sys.stdout/sys.stderr - which are None in this app's --windowed
-    PyInstaller build (no console attached), so an unguarded write there
-    would raise instead of just printing."""
-
-    def debug(self, msg):
-        pass
-
-    def info(self, msg):
-        pass
-
-    def warning(self, msg):
-        pass
-
-    def error(self, msg):
-        pass
+# [FIX] _QuietLogger removed: it existed only to hand yt-dlp's *library* API a
+# no-op logger, so nothing it printed could reach the sys.stdout/sys.stderr
+# that are None in the --windowed build. Running yt-dlp as a subprocess makes
+# that structurally impossible instead - the child owns its own pipes and this
+# process never shares a stream with it.
 
 
 def _lower_thread_priority():
@@ -145,6 +135,53 @@ def _lower_thread_priority():
         pass
 
 
+# yt-dlp is driven as a subprocess (see find_yt_dlp in utils.py for why), so
+# everything the library used to hand back through Python objects now has to
+# come out of stdout. These prefixes tag the lines we care about, keeping them
+# unambiguous against anything else yt-dlp prints.
+#
+# --progress is NOT optional here: with stdout redirected to a pipe (which it
+# always is for us) yt-dlp suppresses progress reporting entirely, and the
+# progress bar would silently never move. Verified against the real binary.
+_P = "@@P@@"      # download progress
+_PP = "@@PP@@"    # postprocessor progress (merge / audio extraction)
+_F = "@@F@@"      # final file path
+_H = "@@H@@"      # resolved video height
+
+PROGRESS_TEMPLATE = (
+    "download:" + _P +
+    "%(progress.status)s|%(progress.downloaded_bytes)s|%(progress.total_bytes)s|"
+    "%(progress.total_bytes_estimate)s|%(progress.speed)s|%(progress.eta)s"
+)
+POSTPROCESS_TEMPLATE = "postprocess:" + _PP + "%(progress.status)s|%(progress.postprocessor)s"
+
+YTDLP_MISSING_MESSAGE = (
+    "yt-dlp nao encontrado - ele e necessario para baixar videos. Coloque o "
+    "yt-dlp.exe em tools\\yt-dlp\\ ao lado do Allora, ou instale-o e "
+    "adicione ao PATH do Windows."
+)
+
+
+def _num(text: str):
+    """yt-dlp writes the literal string 'NA' for a field it doesn't have, so a
+    plain float() would raise on perfectly normal output."""
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _last_error_line(stderr: str) -> str:
+    """Pick the most informative line out of yt-dlp's stderr. It prefixes real
+    failures with 'ERROR:'; if none is present we fall back to the last
+    non-empty line so nothing is ever reported as an empty message."""
+    lines = [ln.strip() for ln in (stderr or "").splitlines() if ln.strip()]
+    errors = [ln for ln in lines if ln.startswith("ERROR:")]
+    if errors:
+        return errors[-1]
+    return lines[-1] if lines else ""
+
+
 class CancelledError(Exception):
     """Raised internally when the user cancels an in-progress download."""
 
@@ -177,6 +214,9 @@ class DownloadItem:
         self.actual_quality = ""
         self.output_path = ""
         self.cancel_event = threading.Event()
+        # Active yt-dlp subprocess, kept so cancel/shutdown can terminate it -
+        # the same field ConversionItem carries for its ffmpeg process.
+        self.process = None
 
 
 class DownloadManager(QueueManager):
@@ -207,6 +247,17 @@ class DownloadManager(QueueManager):
     def _make_worker_thread(self, item):
         return threading.Thread(target=self._download_worker, args=(item,), daemon=True)
 
+    def _on_shutdown_item(self, item):
+        # Now that yt-dlp runs as a child process, closing the app has to kill
+        # it: cancel_event alone only stops OUR loop, and the download would
+        # otherwise keep running (and keep writing) after the window is gone.
+        # Same override ConversionManager already needed for ffmpeg.
+        if item.process is not None:
+            try:
+                item.process.terminate()
+            except Exception:
+                pass
+
     # ------------------------------------------------------------------
     # Queue management
     # ------------------------------------------------------------------
@@ -227,6 +278,14 @@ class DownloadManager(QueueManager):
         if item.status in (DownloadItem.STATUS_DOWNLOADING, DownloadItem.STATUS_MERGING,
                             DownloadItem.STATUS_FETCHING):
             item.cancel_event.set()
+            # Terminating outright makes the cancel immediate. The event alone
+            # is only noticed on the next line of yt-dlp output, which during a
+            # slow merge or a stalled connection can be a long wait.
+            if item.process is not None:
+                try:
+                    item.process.terminate()
+                except Exception:
+                    pass
         else:
             item.status = DownloadItem.STATUS_CANCELLED
             self.item_updated.emit(item.id)
@@ -252,18 +311,23 @@ class DownloadManager(QueueManager):
         item.status = DownloadItem.STATUS_FETCHING
         self.item_updated.emit(item.id)
         try:
-            opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "logger": _QuietLogger(),
-                "noplaylist": True,
-                "skip_download": True,
-                "socket_timeout": 15,
-            }
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(item.url, download=False)
-            if info is None:
-                raise yt_dlp.utils.DownloadError("Não foi possível obter informações do vídeo")
+            ytdlp_path = find_yt_dlp(self.settings.ytdlp_path)
+            if not ytdlp_path:
+                raise RuntimeError(YTDLP_MISSING_MESSAGE)
+
+            # --dump-single-json is the CLI equivalent of the library's
+            # extract_info(download=False): same info dict, serialized.
+            proc = subprocess.run(
+                [ytdlp_path, "--encoding", "utf-8", "--no-warnings", "--no-playlist",
+                 "--skip-download", "--dump-single-json", "--socket-timeout", "15", item.url],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=120, creationflags=no_window_flags(),
+            )
+            if proc.returncode != 0 or not (proc.stdout or "").strip():
+                raise RuntimeError(
+                    _last_error_line(proc.stderr) or "Nao foi possivel obter informacoes do video"
+                )
+            info = json.loads(proc.stdout)
 
             item.title = info.get("title") or item.url
             thumb_url = info.get("thumbnail")
@@ -330,7 +394,12 @@ class DownloadManager(QueueManager):
                 self.item_updated.emit(item.id)
                 self._finish_item(item)
                 return
-            except yt_dlp.utils.DownloadError as exc:
+            except Exception as exc:  # noqa: BLE001 - surface *everything* to the UI
+                # [FIX] Was two branches, one catching yt_dlp.utils.DownloadError
+                # from the library. Driving yt-dlp as a subprocess means every
+                # failure arrives the same way - a RuntimeError carrying its
+                # stderr - so the unavailable/ffmpeg checks collapse into this
+                # single handler instead of being duplicated across two.
                 message = str(exc)
                 last_error = message
                 if _looks_unavailable(message):
@@ -342,12 +411,12 @@ class DownloadManager(QueueManager):
                 if "ffmpeg" in message.lower():
                     self.ffmpeg_missing.emit()
                 if attempt < max_attempts:
-                    time.sleep(1.5 * attempt)
-                    continue
-            except Exception as exc:  # noqa: BLE001 - surface *everything* to the UI
-                last_error = str(exc)
-                if attempt < max_attempts:
-                    time.sleep(1.5 * attempt)
+                    # cancel_event.wait() rather than sleep(): a cancel during
+                    # the backoff is noticed at once instead of after up to
+                    # three seconds of dead waiting.
+                    if item.cancel_event.wait(1.5 * attempt):
+                        cancelled_before_attempt = True
+                        break
                     continue
 
         # [FIX] An explicit cancel is reported as Cancelado even when a
@@ -371,6 +440,10 @@ class DownloadManager(QueueManager):
         settings = self.settings
         os.makedirs(settings.output_dir, exist_ok=True)
 
+        ytdlp_path = find_yt_dlp(settings.ytdlp_path)
+        if not ytdlp_path:
+            raise RuntimeError(YTDLP_MISSING_MESSAGE)
+
         ffmpeg_path = find_ffmpeg(settings.ffmpeg_path)
         needs_ffmpeg = settings.use_ffmpeg_merge or item.quality == AUDIO_ONLY_LABEL
         if needs_ffmpeg and not ffmpeg_is_working(ffmpeg_path):
@@ -378,86 +451,125 @@ class DownloadManager(QueueManager):
 
         outtmpl = os.path.join(settings.output_dir, "%(title).150s [%(id)s].%(ext)s")
 
-        last_progress_emit = [0.0]
-
-        def progress_hook(d):
-            if item.cancel_event.is_set():
-                raise KeyboardInterrupt("cancelado pelo usuário")
-
-            if d.get("status") == "downloading":
-                total = d.get("total_bytes") or d.get("total_bytes_estimate")
-                downloaded = d.get("downloaded_bytes") or 0
-                if total:
-                    item.progress = min(99.0, downloaded / total * 100.0)
-                speed = d.get("speed")
-                eta = d.get("eta")
-                item.speed_text = format_bytes_per_sec(speed)
-                item.eta_text = format_eta(eta)
-                item.status = DownloadItem.STATUS_DOWNLOADING
-
-                now = time.monotonic()
-                if now - last_progress_emit[0] > 0.25:
-                    last_progress_emit[0] = now
-                    self.item_updated.emit(item.id)
-            elif d.get("status") == "finished":
-                item.status = DownloadItem.STATUS_MERGING
-                item.progress = 99.0
-                self.item_updated.emit(item.id)
-
-        def postprocessor_hook(d):
-            if item.cancel_event.is_set():
-                raise KeyboardInterrupt("cancelado pelo usuário")
-            if d.get("status") == "finished":
-                info = d.get("info_dict") or {}
-                filepath = info.get("filepath") or info.get("_filename")
-                if filepath:
-                    item.output_path = filepath
-
-        ydl_opts = {
-            "outtmpl": outtmpl,
-            "noplaylist": True,
-            "progress_hooks": [progress_hook],
-            "postprocessor_hooks": [postprocessor_hook],
-            "quiet": True,
-            "no_warnings": True,
-            "logger": _QuietLogger(),
-            "retries": 3,
-            "fragment_retries": 3,
-            "writethumbnail": settings.save_thumbnail,
-            "writeinfojson": settings.save_metadata,
-            "socket_timeout": 30,
-        }
+        cmd = [
+            ytdlp_path,
+            # --encoding is what makes the utf-8 decoding below correct. By
+            # default yt-dlp writes stdout in the Windows ANSI codepage, so an
+            # accented title came back as mojibake and item.output_path pointed
+            # at a name that did not match the (correctly named) file actually
+            # on disk - "Abrir pasta" would have opened onto nothing. Verified
+            # against the real binary: default is cp1252, PYTHONIOENCODING is
+            # ignored by the frozen build, this flag works.
+            "--encoding", "utf-8",
+            "--newline", "--progress", "--no-warnings", "--no-playlist",
+            "--retries", "3", "--fragment-retries", "3",
+            "--socket-timeout", "30",
+            "--progress-template", PROGRESS_TEMPLATE,
+            "--progress-template", POSTPROCESS_TEMPLATE,
+            "--print", "after_move:" + _F + "%(filepath)s",
+            "--print", "after_move:" + _H + "%(height)s",
+            "-o", outtmpl,
+        ]
         if ffmpeg_path:
-            ydl_opts["ffmpeg_location"] = ffmpeg_path
+            cmd += ["--ffmpeg-location", ffmpeg_path]
+        if settings.save_thumbnail:
+            cmd.append("--write-thumbnail")
+        if settings.save_metadata:
+            cmd.append("--write-info-json")
 
         if item.quality == AUDIO_ONLY_LABEL:
-            ydl_opts["format"] = "bestaudio/best"
-            ydl_opts["postprocessors"] = [{
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": "192",
-            }]
+            cmd += ["-x", "--audio-format", "mp3", "--audio-quality", "192K"]
         else:
-            ydl_opts["format"] = FORMAT_MAP.get(item.quality, FORMAT_MAP["Melhor qualidade disponível"])
+            cmd += ["-f", FORMAT_MAP.get(item.quality, FORMAT_MAP["Melhor qualidade disponível"])]
             if settings.use_ffmpeg_merge:
-                ydl_opts["merge_output_format"] = "mp4"
+                cmd += ["--merge-output-format", "mp4"]
 
+        cmd.append(item.url)
+
+        # encoding pinned to utf-8 instead of left to the locale: yt-dlp emits
+        # UTF-8, but text=True on Windows decodes with the ANSI codepage, which
+        # would mangle every accented title and path it prints back to us.
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=no_window_flags(),
+        )
+        item.process = process
+
+        stderr_lines = []
+
+        def _drain_stderr():
+            for line in process.stderr:
+                stderr_lines.append(line)
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
+        last_emit = 0.0
+        cancelled = False
+        height = None
         try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(item.url, download=True)
-        except KeyboardInterrupt:
+            for raw in process.stdout:
+                if item.cancel_event.is_set():
+                    # A real process kill. The library path could only raise
+                    # KeyboardInterrupt from inside a progress hook, so it had
+                    # to wait for the next callback before anything happened.
+                    process.terminate()
+                    cancelled = True
+                    break
+
+                line = raw.strip()
+                if line.startswith(_P):
+                    parts = line[len(_P):].split("|")
+                    if len(parts) < 6:
+                        continue
+                    status = parts[0]
+                    if status == "downloading":
+                        downloaded = _num(parts[1]) or 0.0
+                        total = _num(parts[2]) or _num(parts[3])
+                        if total:
+                            item.progress = min(99.0, downloaded / total * 100.0)
+                        item.speed_text = format_bytes_per_sec(_num(parts[4]))
+                        item.eta_text = format_eta(_num(parts[5]))
+                        item.status = DownloadItem.STATUS_DOWNLOADING
+                        now = time.monotonic()
+                        if now - last_emit > 0.25:
+                            last_emit = now
+                            self.item_updated.emit(item.id)
+                    elif status == "finished":
+                        item.progress = 99.0
+                        self.item_updated.emit(item.id)
+                elif line.startswith(_PP):
+                    # Merging streams or extracting audio - the phase the UI
+                    # labels "Mesclando audio/video...".
+                    item.status = DownloadItem.STATUS_MERGING
+                    item.progress = 99.0
+                    self.item_updated.emit(item.id)
+                elif line.startswith(_F):
+                    item.output_path = line[len(_F):].strip()
+                elif line.startswith(_H):
+                    raw_height = line[len(_H):].strip()
+                    height = int(raw_height) if raw_height.isdigit() else None
+        finally:
+            process.wait()
+            stderr_thread.join(timeout=2)
+            item.process = None
+
+        if cancelled or item.cancel_event.is_set():
             raise CancelledError()
+
+        if process.returncode != 0:
+            raise RuntimeError(
+                _last_error_line("".join(stderr_lines)) or "Falha desconhecida do yt-dlp"
+            )
 
         if item.quality == AUDIO_ONLY_LABEL:
             item.actual_quality = "MP3 192kbps"
         else:
-            height = None
-            if info:
-                height = info.get("height")
-                if not height:
-                    requested = info.get("requested_downloads") or []
-                    if requested:
-                        height = requested[0].get("height")
             item.actual_quality = height_to_label(height)
 
         item.progress = 100.0
