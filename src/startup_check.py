@@ -8,9 +8,10 @@ is created.
 
 This is a diagnostic safety net, not an installer - there isn't one.
 `requirements.txt` covers the Python side (`pip install -r requirements.txt`);
-ffmpeg and Poppler are external tools the user (or `build_exe.ps1`'s own
-build/distribution step) drops into `tools/ffmpeg/` and `tools/poppler/` next
-to the app, installs system-wide, or gets via `winget`. This module exists so
+ffmpeg, Poppler and yt-dlp are external tools the user (or `build_exe.ps1`'s
+own build/distribution step) drops into `tools/ffmpeg/`, `tools/poppler/` and
+`tools/yt-dlp/` next to the app, installs system-wide, or gets via `winget`.
+This module exists so
 that if any of that is still missing, the user gets one clear, all-in-one
 heads-up instead of a raw traceback deep inside some unrelated feature the
 first time they touch it.
@@ -28,12 +29,11 @@ with wherever those functions actually look.
 
 import importlib
 
-from utils import find_poppler_bin_dir
+from utils import find_poppler_bin_dir, find_yt_dlp
 
 # (import name, pip package name) - matches requirements.txt exactly.
 REQUIRED_PACKAGES = [
     ("PySide6", "PySide6"),
-    ("yt_dlp", "yt-dlp"),
     ("requests", "requests"),
     ("cv2", "opencv-python-headless"),
     ("numpy", "numpy"),
@@ -76,8 +76,19 @@ def verify_environment() -> list:
     # keeping this one too would pop a second, more generic warning right
     # alongside MainWindow._check_ffmpeg_on_start()'s own dedicated
     # ffmpeg-missing dialog, which already tells the user exactly what to
-    # do (including where to fix it in Configurações). Poppler has no
-    # equivalent proactive check elsewhere, so it stays here.
+    # do (including where to fix it in Configurações). Poppler and yt-dlp have
+    # no equivalent proactive check elsewhere, so they stay here.
+
+    # yt-dlp is an external binary now, not a bundled Python package - see
+    # utils.find_yt_dlp for why. Without it the Downloads tab cannot work at
+    # all, so unlike poppler this is worth flagging up front.
+    if not find_yt_dlp():
+        warnings.append(
+            "yt-dlp nao encontrado - necessario para baixar videos. Coloque o "
+            "yt-dlp.exe em tools\\yt-dlp\\ ao lado do Allora, ou instale-o "
+            "e adicione ao PATH."
+        )
+
     if not find_poppler_bin_dir():
         warnings.append(
             "Poppler não encontrado - necessário para converter PDFs na aba "

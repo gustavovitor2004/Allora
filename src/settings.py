@@ -45,6 +45,11 @@ class Settings:
     save_thumbnail: bool = False
     save_metadata: bool = False
     ffmpeg_path: str = ""
+    # Optional explicit path to yt-dlp, mirroring ffmpeg_path. Empty means
+    # "discover it" (PATH, then tools/yt-dlp next to the .exe) - see
+    # utils.find_yt_dlp. There is no Configuracoes field for this yet; it
+    # exists so a hand-edited config.json can point at a specific build.
+    ytdlp_path: str = ""
     theme: str = DEFAULT_THEME  # key into theme.THEMES
     ocr_output_dir: str = DEFAULT_OCR_OUTPUT_DIR
     doc_convert_output_dir: str = DEFAULT_DOC_CONVERT_OUTPUT_DIR
