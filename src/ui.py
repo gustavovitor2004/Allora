@@ -30,7 +30,7 @@ icon-bearing widget gets rebuilt when the user switches theme.
 
 import os
 
-from PySide6.QtCore import Qt, QSize, QPoint
+from PySide6.QtCore import Qt, QSize, QPoint, QTimer
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -967,82 +967,28 @@ class UrlInput(QPlainTextEdit):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setLineWrapMode(QPlainTextEdit.NoWrap)
-        # Qt's own WA_InputMethodEnabled only turns off Qt's IME candidate
-        # window - it does nothing to the native Win32 IME context that
-        # Windows' shell actually keys the emoji/touch-keyboard flyout icon
-        # off of. Detaching that context directly (below, once the widget
-        # has a real native handle) is the documented workaround other
-        # frameworks use for this exact icon; disabling WA_InputMethodEnabled
-        # too doesn't hurt as a secondary signal.
-        self.setAttribute(Qt.WA_InputMethodEnabled, False)
-        self._detach_windows_ime()
 
-    def _detach_windows_ime(self) -> None:
-        """Removes the native IME context Windows associates with this
-        control's HWND, which is what the shell actually checks before
-        drawing its emoji/touch-keyboard flyout icon over a focused text
-        field - Qt's own input-method flag (above) doesn't touch this.
-        Uses ImmAssociateContextEx with IACE_IGNORENOCONTEXT rather than
-        plain ImmAssociateContext(hwnd, None): the plain call only detaches
-        once and Windows can silently reattach a fresh default IME context
-        the next time the field regains focus, so the icon comes back;
-        IACE_IGNORENOCONTEXT tells the system to remember "no IME" for this
-        HWND persistently. Falls back to the older call on Windows builds
-        where ImmAssociateContextEx isn't available. Trade-off: this also
-        turns off IME composition for this field, so typing Chinese/
-        Japanese/Korean directly into it won't work (pasting already-typed
-        text is unaffected). Windows-only and best-effort - wrapped so any
-        failure just leaves the field working normally."""
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
-
-            self.setAttribute(Qt.WA_NativeWindow, True)
-            hwnd = int(self.winId())
-            IACE_IGNORENOCONTEXT = 0x0004
-            try:
-                ok = ctypes.windll.imm32.ImmAssociateContextEx(hwnd, None, IACE_IGNORENOCONTEXT)
-                if not ok:
-                    raise OSError("ImmAssociateContextEx returned FALSE")
-            except (AttributeError, OSError):
-                ctypes.windll.imm32.ImmAssociateContext(hwnd, None)
-
-            # The visible icon itself (the little keyboard glyph docked to
-            # the field's right edge) isn't drawn by IME at all - it's the
-            # separate "touch keyboard invocation" affordance TextInputHost
-            # overlays on any focusable/editable control system-wide since
-            # Windows 10 1903. The IME detach above doesn't touch it. The
-            # Microsoft-documented opt-out (also how Chromium suppresses it
-            # on every editable HWND - see ui/base/win/internal_constants.cc)
-            # is tagging the window with this exact property name.
-            ctypes.windll.user32.SetPropW(hwnd, "MicrosoftTabletPenServiceProperty", ctypes.c_void_p(1))
-        except Exception:
-            pass
+    # [FIX] Removed as dead code: _detach_windows_ime(), the
+    # WA_InputMethodEnabled/WA_NativeWindow attribute calls that only existed
+    # to feed it, and the focusInEvent/showEvent overrides whose entire body
+    # was re-calling it (~60 lines total).
+    #
+    # It was written to kill a "ghost icon" docked to this field's right edge,
+    # on the theory that it was the Windows IME / touch-keyboard flyout. That
+    # diagnosis was wrong: the glyphs were Qt's own scrollbar arrow buttons,
+    # appearing whenever a multi-URL paste overflowed the fixed 40px height.
+    # ScrollBarAlwaysOff above is what actually fixed it, and it is still
+    # here. So this code never solved anything - while still costing real
+    # behavior: it forced a native HWND for the widget (opting it out of Qt's
+    # alien-widget compositing) and detached the IME context outright, which
+    # disables Chinese/Japanese/Korean composition in the one field where the
+    # user types. Removing it restores CJK input and normal Qt rendering.
 
     def keyPressEvent(self, event):
         if event.key() in (Qt.Key_Return, Qt.Key_Enter) and not (event.modifiers() & Qt.ShiftModifier):
             self._on_submit()
             return
         super().keyPressEvent(event)
-
-    def focusInEvent(self, event):
-        # Belt-and-suspenders: re-detach on every focus in case
-        # IACE_IGNORENOCONTEXT isn't fully honored on this Windows build
-        # and the shell reattaches a default IME context anyway.
-        self._detach_windows_ime()
-        super().focusInEvent(event)
-
-    def showEvent(self, event):
-        # The __init__-time call happens before this widget is parented
-        # into its layout (see input_row.addWidget() in
-        # MainWindow._build_downloads_tab()) - Qt can recreate the native
-        # HWND on reparenting, silently discarding whatever winId() pointed
-        # at during __init__. By the time showEvent fires the widget is
-        # fully parented and its HWND is final, so this is the call that
-        # actually sticks.
-        super().showEvent(event)
-        self._detach_windows_ime()
 
 
 class MainWindow(QMainWindow):
@@ -1081,7 +1027,14 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._connect_manager_signals()
         self.apply_theme(settings.theme)
-        self._check_ffmpeg_on_start()
+        # [FIX] Deferred to the first event-loop turn. Called inline, this ran
+        # inside __init__ - i.e. before main.py had even reached window.show()
+        # - so on a machine without ffmpeg the user's first sight of the app
+        # was a lone modal warning over an empty desktop, with the main window
+        # only appearing after they dismissed it (__init__ couldn't return
+        # until then). Now the window paints first, matching how main.py
+        # already defers its own startup diagnostics.
+        QTimer.singleShot(0, self._check_ffmpeg_on_start)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -1494,26 +1447,38 @@ class MainWindow(QMainWindow):
         self.conversion_manager.start_all()
         self.conv_status_label.setText("Convertendo...")
 
-    def on_pause_conversions(self):
-        if self.conversion_manager.paused:
-            self.conversion_manager.paused = False
-            self.conv_pause_btn.setText(" Pausar")
-            set_action_icon(self.conv_pause_btn, "pause", self.settings.theme)
-            self.conv_status_label.setText("Convertendo...")
+    # [FIX] on_pause() and on_pause_conversions() carried the same twelve
+    # lines twice over, differing only in which manager/button/label they
+    # drove and the wording of the resumed state. Both now share this.
+    def _toggle_pause(self, manager, pause_btn, status_label, running_text: str):
+        if manager.paused:
+            # [FIX] Was `manager.paused = False` - the GUI writing a
+            # manager's state directly, the one habit AGENTS.md invariant 1
+            # exists to stop. QueueManager.resume() owns the transition now.
+            manager.resume()
+            pause_btn.setText(" Pausar")
+            set_action_icon(pause_btn, "pause", self.settings.theme)
+            status_label.setText(running_text)
         else:
-            self.conversion_manager.pause()
-            self.conv_pause_btn.setText(" Retomar")
-            set_action_icon(self.conv_pause_btn, "play", self.settings.theme)
+            manager.pause()
+            pause_btn.setText(" Retomar")
+            set_action_icon(pause_btn, "play", self.settings.theme)
             # [AUDIT] Section 6 (design) - idea 2: "Pausar" deliberately lets
             # in-flight jobs finish rather than stopping them - this used to
             # just say that in the abstract, with no visibility into how
             # many jobs that actually applies to. A snapshot at the moment
             # Pausar was clicked, not a live counter.
-            active = self.conversion_manager.active_count()
-            waiting = self.conversion_manager.waiting_count()
-            self.conv_status_label.setText(
+            active = manager.active_count()
+            waiting = manager.waiting_count()
+            status_label.setText(
                 f"Pausado — {active} em andamento, {waiting} aguardando."
             )
+
+    def on_pause_conversions(self):
+        self._toggle_pause(
+            self.conversion_manager, self.conv_pause_btn,
+            self.conv_status_label, "Convertendo...",
+        )
 
     def _on_conv_item_added(self, item_id: int):
         item = self.conversion_manager.get_item(item_id)
@@ -1581,22 +1546,9 @@ class MainWindow(QMainWindow):
         self.status_bar_label.setText("Baixando...")
 
     def on_pause(self):
-        if self.manager.paused:
-            self.manager.paused = False
-            self.pause_btn.setText(" Pausar")
-            set_action_icon(self.pause_btn, "pause", self.settings.theme)
-            self.status_bar_label.setText("Baixando...")
-        else:
-            self.manager.pause()
-            self.pause_btn.setText(" Retomar")
-            set_action_icon(self.pause_btn, "play", self.settings.theme)
-            # [AUDIT] Section 6 (design) - idea 2: same wording as the
-            # conversion tab's on_pause_conversions() - see that comment.
-            active = self.manager.active_count()
-            waiting = self.manager.waiting_count()
-            self.status_bar_label.setText(
-                f"Pausado — {active} em andamento, {waiting} aguardando."
-            )
+        self._toggle_pause(
+            self.manager, self.pause_btn, self.status_bar_label, "Baixando...",
+        )
 
     def open_settings(self):
         dialog = SettingsDialog(self.settings, self)
