@@ -6,7 +6,7 @@ fotos de papel + converter/mesclar PDF/DOCX/TXT/imagem).
 
 Interface **100% em português**. Comentários e docstrings do código **em inglês**.
 
-Repositório: `gustavovitor2004/Allora` · Versão atual: **1.3.4**
+Repositório: `gustavovitor2004/Allora` · Versão atual: **1.4.0**
 
 ---
 
@@ -23,11 +23,18 @@ python src/main.py            # rodar do fonte
 
 O build é `--windowed`: **não existe console**. `sys.stdout` é `None`, então `print()`
 não aparece em lugar nenhum e qualquer biblioteca que escreva direto em stdout/stderr
-pode levantar exceção. É por isso que o yt-dlp recebe um `_QuietLogger` explícito em
-`downloader.py`.
+pode levantar exceção. O yt-dlp costumava precisar de um `_QuietLogger` explícito por
+causa disso; rodando como subprocesso o problema deixa de existir por construção — o
+processo filho tem os próprios pipes e nunca compartilha stream com a GUI.
 
-Dependências externas ficam em `tools/` ao lado do .exe (ffmpeg, poppler) — não são
-empacotadas. `config.json` também fica ao lado do .exe.
+Dependências externas ficam em `tools/` ao lado do .exe (**ffmpeg, poppler, yt-dlp**) —
+não são empacotadas. `config.json` também fica ao lado do .exe.
+
+O yt-dlp é excluído do bundle de propósito (`--exclude-module yt_dlp` em `build_exe.ps1`).
+Ele quebra sempre que um site muda de extrator, e congelado dentro do .exe o usuário não
+teria como consertar sem esperar uma release nova. Como binário próprio, `yt-dlp.exe -U`
+atualiza no lugar. **Isso não reduz o pacote** — o bundle cai só 2 MB e o yt-dlp.exe pesa
+17 MB. O ganho é exclusivamente poder atualizar.
 
 ---
 
@@ -72,8 +79,13 @@ nos dois e precisou ser corrigido duas vezes.
   `_start_item`, `_make_worker_thread`) e só o que é realmente diferente.
 - Uma thread **despachante** decide quando iniciar o próximo item, respeitando
   `max_simultaneous` e as flags `running`/`paused`.
-- Cancelamento: levanta `KeyboardInterrupt` de dentro do progress hook do yt-dlp — é a
-  forma padrão de abortar limpo no meio da transferência.
+- O yt-dlp roda como **subprocesso**, não como biblioteca. Tudo que antes vinha por
+  objetos Python agora sai pelo stdout: `--dump-single-json` para metadados,
+  `--progress-template` para progresso, `--print after_move:` para caminho final e
+  altura. Ver `_run_ytdlp`/`_fetch_metadata` em `downloader.py`.
+- Cancelamento: mata o processo (`terminate()`). É mais direto que o caminho antigo, que
+  só conseguia levantar `KeyboardInterrupt` de dentro do progress hook e portanto tinha
+  que esperar o próximo callback.
 - "Pausar" só impede o despachante de iniciar **novos** itens; o que já está baixando
   termina naturalmente (o yt-dlp não expõe pausa real). Retomar é `resume()` — nunca
   escreva `manager.paused` direto da UI.
@@ -238,6 +250,15 @@ arquitetura ou exige decisão de produto.
 - **Cancelar tem que sempre chegar a um status terminal**: se um caminho de cancelamento
   sai do worker sem gravar `STATUS_CANCELLED`/`STATUS_ERROR`, a linha fica presa em
   "Baixando..." para sempre e o botão de cancelar não faz mais nada.
+- **`--progress` é obrigatório ao chamar o yt-dlp por subprocesso**: com stdout num pipe
+  (que é sempre o nosso caso) ele suprime o relatório de progresso por completo, e o
+  `--progress-template` simplesmente nunca emite nada. A barra ficaria parada em 0% sem
+  erro nenhum. Comprovado contra o binário real.
+- **`--encoding utf-8` também é obrigatório**: por padrão o yt-dlp escreve o stdout no
+  codepage ANSI do Windows (cp1252 aqui). Sem a flag, um título acentuado volta como
+  mojibake e o `output_path` aponta para um nome que não bate com o arquivo real em
+  disco — que, esse sim, é gravado corretamente. O "Abrir pasta" abriria no vazio.
+  `PYTHONIOENCODING` não resolve: o binário congelado ignora.
 - **Ícone fantasma na caixa de URL (parte 2)**: o `_detach_windows_ime()` que tentava
   resolver isso via Win32 foi **removido** — nunca foi a causa (era a scrollbar do Qt) e
   ainda quebrava digitação CJK. Não reintroduza.
