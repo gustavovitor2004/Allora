@@ -97,11 +97,11 @@ def order_points(points) -> np.ndarray:
     return rect
 
 
-def full_image_corners(image_bgr: np.ndarray):
-    """The 4 corners of the whole image, used as a fallback when automatic
-    detection doesn't find a plausible document boundary."""
-    h, w = image_bgr.shape[:2]
-    return [(0, 0), (w - 1, 0), (w - 1, h - 1), (0, h - 1)]
+# [FIX] full_image_corners() removed as dead code - defined here, never
+# called from anywhere in the app. Its stated job (fall back to the whole
+# image when detection finds no document boundary) is really done by
+# CornerEditor.set_image() in tab_documentos.py, which builds the same four
+# corners itself when it receives corners=None. Nothing imported this.
 
 
 # ---------------------------------------------------------------------------
