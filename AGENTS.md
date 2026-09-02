@@ -48,7 +48,7 @@ src/
   startup_check.py         Verificação de dependências na inicialização.
   documentos/
     tab_documentos.py      Aba Documentos: editor de cantos arrastáveis + lista de conversão.
-    scanner_engine.py      Pipeline OpenCV puro (warp de perspectiva + realçe). Sem Qt aqui.
+    scanner_engine.py      Pipeline OpenCV puro (warp de perspectiva + realce). Sem Qt aqui.
     converter.py           Conversão local de documentos e mesclagem de PDFs.
     workers.py             QThreads da aba Documentos.
 assets/                    icon.ico, logo.png (empacotados via --add-data)
