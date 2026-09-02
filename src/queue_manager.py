@@ -53,6 +53,14 @@ class QueueManager(QObject):
         self.running = False   # True once the user has pressed "Iniciar tudo"/"Converter tudo"
         self.paused = False
         self._shutdown = False
+        # [FIX] queue_idle is an EDGE event ("the queue just went idle"), but
+        # the dispatcher re-evaluated the same level condition every 0.4s and
+        # re-emitted forever once the queue drained - a cross-thread queued
+        # signal plus a GUI-thread slot, 2.5x a second, for the rest of the
+        # session. This latch makes it fire once per idle transition; it is
+        # cleared again the moment any item actually starts (see
+        # _dispatch_loop) or the user presses start (see start_all).
+        self._idle_emitted = False
 
         self._dispatcher = threading.Thread(target=self._dispatch_loop, daemon=True)
         self._dispatcher.start()
@@ -98,15 +106,33 @@ class QueueManager(QObject):
     def start_all(self):
         self.running = True
         self.paused = False
+        self._idle_emitted = False   # [FIX] see _idle_emitted in __init__
 
     def pause(self):
         self.paused = True
 
+    # [FIX] Resuming used to be done by the GUI writing `manager.paused =
+    # False` directly (ui.py's on_pause/on_pause_conversions), the only place
+    # outside this class that reached into a manager's state - the same habit
+    # AGENTS.md invariant 1 exists to stop. Pairing pause() with a real
+    # resume() keeps every state transition owned by the manager.
+    def resume(self):
+        self.paused = False
+
     def clear_completed(self):
         with self._lock:
+            # [FIX] Added the missing `if i in self.items` guard. This was the
+            # one comprehension in this module indexing self.items[i] while
+            # iterating self.order without it - the exact pattern that killed
+            # the dispatcher thread historically (see _dispatch_loop's comment
+            # and AGENTS.md invariant 1). Every mutation pairs the items/order
+            # writes under _lock today, so it isn't reachable right now, but a
+            # single future unlocked mutation would turn this into a KeyError
+            # that propagates out of a GUI slot instead of a worker thread.
             to_remove = [
                 i for i in self.order
-                if self.items[i].status in self._done_statuses()
+                if i in self.items
+                and self.items[i].status in self._done_statuses()
             ]
             for i in to_remove:
                 del self.items[i]
@@ -186,14 +212,25 @@ class QueueManager(QObject):
                 self.item_updated.emit(item.id)
                 self.active_threads[item.id].start()
 
-            if not to_start:
+            if to_start:
+                # Work just started - the next drain is a fresh idle edge.
+                self._idle_emitted = False
+            else:
                 with self._lock:
                     any_active = bool(self.active_threads)
                     any_waiting = any(
                         self.items[i].status == waiting_status for i in self.order
                         if i in self.items
                     )
-                if not any_active and not any_waiting and self.running:
+                    # [FIX] Latched so this fires once per idle transition
+                    # instead of every 0.4s forever - see _idle_emitted.
+                    newly_idle = (
+                        not any_active and not any_waiting
+                        and self.running and not self._idle_emitted
+                    )
+                    if newly_idle:
+                        self._idle_emitted = True
+                if newly_idle:
                     self.queue_idle.emit()
 
     def _finish_item(self, item):
@@ -204,5 +241,10 @@ class QueueManager(QObject):
                 self.items[i].status == self._waiting_status() for i in self.order
                 if i in self.items
             )
-        if not any_active and not any_waiting:
+            # [FIX] Same idle latch as _dispatch_loop - without it this and
+            # the dispatcher both announced the same drain.
+            newly_idle = not any_active and not any_waiting and not self._idle_emitted
+            if newly_idle:
+                self._idle_emitted = True
+        if newly_idle:
             self.queue_idle.emit()

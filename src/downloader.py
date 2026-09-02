@@ -308,9 +308,17 @@ class DownloadManager(QueueManager):
         _lower_thread_priority()
         max_attempts = 3
         last_error = None
+        # [FIX] Tracks a cancel observed at the top of the retry loop (rather
+        # than mid-transfer, which raises CancelledError through the progress
+        # hook and returns early below). Without this the loop just broke out
+        # with last_error still None, so NOTHING set a terminal status and the
+        # row stayed on "Baixando..." forever - its cancel button dead, since
+        # cancel_item() only re-sets an already-set event for that status.
+        cancelled_before_attempt = False
 
         for attempt in range(1, max_attempts + 1):
             if item.cancel_event.is_set():
+                cancelled_before_attempt = True
                 break
             try:
                 self._run_ytdlp(item)
@@ -342,7 +350,17 @@ class DownloadManager(QueueManager):
                     time.sleep(1.5 * attempt)
                     continue
 
-        if last_error:
+        # [FIX] An explicit cancel is reported as Cancelado even when a
+        # previous attempt had already failed - the user's action is the more
+        # accurate outcome than a transient error we were about to retry.
+        # Deliberately checked before last_error, and never on the success
+        # path (a cancel landing after the final progress hook still leaves a
+        # fully downloaded file, which must stay Concluído).
+        if cancelled_before_attempt:
+            item.status = DownloadItem.STATUS_CANCELLED
+            item.error_message = ""
+            self.item_updated.emit(item.id)
+        elif last_error:
             item.status = DownloadItem.STATUS_ERROR
             item.error_message = last_error
             self.item_updated.emit(item.id)
