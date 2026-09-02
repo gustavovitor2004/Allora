@@ -90,6 +90,29 @@ class Settings:
         return Settings(**merged)
 
 
+def _ensure_dir(path: str, fallback: str) -> str:
+    """Return a directory that actually exists, preferring `path` and falling
+    back to `fallback`.
+
+    [FIX] The three output folders each repeated the same
+    try-makedirs / on-OSError-reset-to-default / makedirs-again block. That
+    second makedirs was itself unguarded, so a home directory that can't be
+    written to (locked-down profile, full disk) turned a merely-bad saved
+    setting into an OSError escaping load_settings() - which main.py can only
+    answer with a fatal "erro ao iniciar" dialog, leaving the app unable to
+    open at all. Returning the best path we managed lets the app start; every
+    feature that actually writes there already surfaces its own OSError to
+    the user (see ScannerSubTab.on_save_as, ConvertSubTab.on_convert_clicked,
+    SettingsDialog.accept), so nothing fails silently."""
+    for candidate in (path, fallback):
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    return fallback
+
+
 def load_settings() -> Settings:
     """Load settings from config.json, creating the file with defaults on
     first run (or if the existing file is corrupted)."""
@@ -106,25 +129,12 @@ def load_settings() -> Settings:
         settings = Settings()
         save_settings(settings)
 
-    # Make sure the output directory actually exists / is creatable.
-    try:
-        os.makedirs(settings.output_dir, exist_ok=True)
-    except OSError:
-        settings.output_dir = DEFAULT_OUTPUT_DIR
-        os.makedirs(settings.output_dir, exist_ok=True)
-
-    # Same for the Documentos tab's OCR / conversion output folders.
-    try:
-        os.makedirs(settings.ocr_output_dir, exist_ok=True)
-    except OSError:
-        settings.ocr_output_dir = DEFAULT_OCR_OUTPUT_DIR
-        os.makedirs(settings.ocr_output_dir, exist_ok=True)
-
-    try:
-        os.makedirs(settings.doc_convert_output_dir, exist_ok=True)
-    except OSError:
-        settings.doc_convert_output_dir = DEFAULT_DOC_CONVERT_OUTPUT_DIR
-        os.makedirs(settings.doc_convert_output_dir, exist_ok=True)
+    # Make sure the three output directories exist / are creatable.
+    settings.output_dir = _ensure_dir(settings.output_dir, DEFAULT_OUTPUT_DIR)
+    settings.ocr_output_dir = _ensure_dir(settings.ocr_output_dir, DEFAULT_OCR_OUTPUT_DIR)
+    settings.doc_convert_output_dir = _ensure_dir(
+        settings.doc_convert_output_dir, DEFAULT_DOC_CONVERT_OUTPUT_DIR
+    )
 
     return settings
 
