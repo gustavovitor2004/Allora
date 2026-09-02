@@ -216,6 +216,51 @@ def ffmpeg_is_working(ffmpeg_path: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# yt-dlp detection
+# ---------------------------------------------------------------------------
+
+def find_yt_dlp(custom_path: str = "") -> str:
+    """Return a usable yt-dlp executable path, or '' if none found.
+
+    yt-dlp is an EXTERNAL tool for this app, exactly like ffmpeg and poppler -
+    it is deliberately not bundled into the PyInstaller build. The reason is
+    upgradability, not size: yt-dlp breaks whenever a site changes its
+    extractor, which happens on a scale of weeks, and a frozen copy inside the
+    .exe leaves the user with no way to fix it short of waiting for a whole
+    new Allora release. Shipped as its own binary, `yt-dlp.exe -U` updates it
+    in place.
+
+    Same lookup order as find_ffmpeg(), for consistency: an explicit path from
+    Configuracoes, then PATH (which is where `pip install yt-dlp` puts its
+    console script, so running from source just works), then the tools/ folder
+    next to the .exe that the packaged build ships."""
+    if custom_path:
+        candidate = custom_path
+        if os.path.isdir(candidate):
+            candidate = os.path.join(candidate, "yt-dlp.exe" if os.name == "nt" else "yt-dlp")
+        if os.path.isfile(candidate):
+            return candidate
+
+    found = shutil.which("yt-dlp")
+    if found:
+        return found
+
+    if os.name == "nt":
+        bundled = os.path.join(project_root(), "tools", "yt-dlp", "yt-dlp.exe")
+        if os.path.isfile(bundled):
+            return bundled
+
+    return ""
+
+
+def yt_dlp_is_working(yt_dlp_path: str) -> bool:
+    """Confirm the yt-dlp binary actually runs. Uses --version (yt-dlp has no
+    -version alias), and rides the same (path, mtime) cache as ffmpeg so a
+    self-update is picked up automatically on the next call."""
+    return binary_is_working(yt_dlp_path, "--version")
+
+
+# ---------------------------------------------------------------------------
 # Poppler detection (needed by pdf2image, used for PDF -> image conversion)
 # ---------------------------------------------------------------------------
 
