@@ -1,3 +1,8 @@
+# yt-dlp e uma ferramenta EXTERNA, como ffmpeg e poppler - ela NAO vai
+# empacotada no .exe (ver --exclude-module em build_exe.ps1). Instalar
+# via pip aqui e conveniencia para rodar do fonte: o pip coloca o
+# yt-dlp.exe no PATH, que e onde utils.find_yt_dlp() procura. O build
+# distribuido usa tools/yt-dlp/yt-dlp.exe, atualizavel com `yt-dlp.exe -U`.
 yt-dlp>=2024.8.6
 PySide6>=6.6.0
 requests>=2.31.0
