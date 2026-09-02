@@ -15,10 +15,11 @@ theme.apply_theme() sets, with no Documentos-specific styling needed.
 import itertools
 import os
 
-import cv2
 import numpy as np
 from PySide6.QtCore import Qt, QPointF, QRectF, QSize, QUrl
-from PySide6.QtGui import QDesktopServices, QImage, QPainter, QPen, QPixmap, QPolygonF
+# [FIX] cv2 and QImage dropped - after _bgr_to_qpixmap() started delegating
+# to workers.bgr_to_qimage(), this module had no remaining use for either.
+from PySide6.QtGui import QDesktopServices, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QComboBox,
     QListWidget, QListWidgetItem, QProgressBar, QFileDialog, QCheckBox,
@@ -28,7 +29,9 @@ from PySide6.QtWidgets import (
 
 from documentos import scanner_engine
 from documentos import converter as doc_converter
-from documentos.workers import ImagePrepWorker, ScannerWorker, ConversionWorker
+from documentos.workers import (
+    ImagePrepWorker, ScannerWorker, ConversionWorker, bgr_to_qimage,
+)
 from icons import make_icon
 from settings import save_settings
 from theme import repolish, theme_colors
@@ -44,6 +47,27 @@ from utils import format_size
 _ORPHANED_WORKERS = set()
 
 
+def _retire_worker(worker):
+    """[FIX] Drop our last reference to `worker` safely.
+
+    Every `self.worker = SomeWorker(...)` below overwrites the attribute that
+    held the PREVIOUS worker. If that one is still running, its Python
+    refcount hits zero, PySide6 destroys the underlying C++ QThread mid-run,
+    and Qt aborts the whole process ("QThread: Destroyed while thread is
+    still running") - the same failure shutdown() was already hardened
+    against, just reached from a different direction. Each start path is
+    nominally guarded by disabling its own button, but ConvertSubTab makes it
+    genuinely reachable: all_finished is emitted as the last statement of
+    run(), so a user clicking "Converter" again the instant the batch reports
+    done can replace a worker whose thread has not finished unwinding yet.
+    Parking it here (it removes itself once it really finishes) costs nothing
+    and removes the whole class of race."""
+    if worker is None or not worker.isRunning():
+        return
+    _ORPHANED_WORKERS.add(worker)
+    worker.finished.connect(lambda: _ORPHANED_WORKERS.discard(worker))
+
+
 def _finish_or_keep_alive(worker, timeout_ms=3000):
     """Give `worker` up to timeout_ms to finish. If it's still running past
     that (its work has no cancellation point it has reached yet, or
@@ -53,19 +77,20 @@ def _finish_or_keep_alive(worker, timeout_ms=3000):
         return
     if worker.wait(timeout_ms):
         return
-    _ORPHANED_WORKERS.add(worker)
-    worker.finished.connect(lambda: _ORPHANED_WORKERS.discard(worker))
+    _retire_worker(worker)
 
 
 def _bgr_to_qpixmap(image_bgr: np.ndarray) -> QPixmap:
-    """Convert an OpenCV BGR numpy array into a QPixmap for display. Copies
-    the QImage explicitly so the pixmap doesn't end up depending on the
-    numpy array's buffer staying alive."""
-    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-    rgb = np.ascontiguousarray(rgb)
-    height, width, channels = rgb.shape
-    qimage = QImage(rgb.data, width, height, channels * width, QImage.Format_RGB888)
-    return QPixmap.fromImage(qimage.copy())
+    """Convert an OpenCV BGR numpy array into a QPixmap for display.
+
+    [FIX] Was a byte-for-byte duplicate of workers.bgr_to_qimage() with a
+    QPixmap.fromImage() bolted onto the end. Delegating keeps the
+    detached-copy rule (the QImage must not keep pointing at the numpy
+    buffer) defined in exactly one place. The QPixmap wrap stays here rather
+    than moving into workers.py because QPixmap may only be constructed on
+    the GUI thread - which is the whole reason that module hands back a
+    QImage."""
+    return QPixmap.fromImage(bgr_to_qimage(image_bgr))
 
 
 class CornerEditor(QWidget):
@@ -452,6 +477,7 @@ class ScannerSubTab(QWidget):
         for btn in (self.save_jpeg_btn, self.save_png_btn, self.save_pdf_btn):
             btn.setEnabled(False)
 
+        _retire_worker(self.prep_worker)   # [FIX] never drop a live QThread
         self.prep_worker = ImagePrepWorker(path)
         self.prep_worker.finished_ok.connect(
             lambda p, qimage, corners: self._on_image_prepared(generation, p, qimage, corners)
@@ -503,6 +529,7 @@ class ScannerSubTab(QWidget):
         self.select_btn.setEnabled(False)
         self.progress_bar.setVisible(True)
 
+        _retire_worker(self.worker)   # [FIX] never drop a live QThread
         self.worker = ScannerWorker(self.current_path, corners, self._selected_mode())
         self.worker.finished_ok.connect(self._on_scan_finished)
         self.worker.failed.connect(self._on_scan_failed)
@@ -561,7 +588,14 @@ class ScannerSubTab(QWidget):
         # those are always new QPixmap objects rather than mutated in
         # place.
         target_w, target_h = self.result_label.width(), self.result_label.height()
-        cache_key = (id(pixmap), target_w, target_h)
+        # [FIX] Keyed on QPixmap.cacheKey() instead of id(). CPython recycles
+        # the addresses of freed objects, so id() is only unique among LIVE
+        # objects - and the pixmap this key describes is exactly the one that
+        # gets released when a new scan replaces it, leaving a stale integer
+        # that a later pixmap could legitimately match and so be served the
+        # previous scan's rendering. cacheKey() is Qt's own identifier for
+        # the pixmap's content and is never reused.
+        cache_key = (pixmap.cacheKey(), target_w, target_h)
         if self._preview_cache_key != cache_key:
             self._preview_cache = pixmap.scaled(
                 target_w, target_h, Qt.KeepAspectRatio, Qt.SmoothTransformation,
@@ -1135,6 +1169,7 @@ class ConvertSubTab(QWidget):
             self._refresh_progress_display()
 
         job_snapshot = [(job["id"], job["path"]) for job in self.jobs]
+        _retire_worker(self.worker)   # [FIX] never drop a live QThread
         self.worker = ConversionWorker(
             job_snapshot, output_dir, target_ext,
             merge=self._merge_active, skip_ids=self._skip_ids, output_name=output_name,
