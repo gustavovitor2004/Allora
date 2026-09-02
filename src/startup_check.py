@@ -11,10 +11,9 @@ This is a diagnostic safety net, not an installer - there isn't one.
 ffmpeg, Poppler and yt-dlp are external tools the user (or `build_exe.ps1`'s
 own build/distribution step) drops into `tools/ffmpeg/`, `tools/poppler/` and
 `tools/yt-dlp/` next to the app, installs system-wide, or gets via `winget`.
-This module exists so
-that if any of that is still missing, the user gets one clear, all-in-one
-heads-up instead of a raw traceback deep inside some unrelated feature the
-first time they touch it.
+This module exists so that if any of that is still missing, the user gets one
+clear, all-in-one heads-up instead of a raw traceback deep inside some
+unrelated feature the first time they touch it.
 
 # [AUDIT] Section 4 - dead-comment drift: this docstring and the warning
 # strings below used to reference "Allora.bat" as the installer that sets
