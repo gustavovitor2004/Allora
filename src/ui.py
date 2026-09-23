@@ -557,6 +557,7 @@ class ConversionItemWidget(QFrame):
             self.meta_label.setText(f"{category_label}   ·   .{item.source_ext} → .{item.target_ext}")
         else:
             self.meta_label.setText(f".{item.source_ext}")
+
         self.progress_bar.setValue(int(item.progress))
         self.format_combo.setEnabled(item.status == ConversionItem.STATUS_WAITING and item.category is not None)
         # [AUDIT] Section 6 (design) - idea 3: clear any stale error tooltip
