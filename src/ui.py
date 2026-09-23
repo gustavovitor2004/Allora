@@ -47,7 +47,7 @@ from documentos.tab_documentos import DocumentosTab
 from icons import make_icon
 from settings import Settings, QUALITY_CHOICES, save_settings
 from theme import (
-    apply_theme as set_app_theme, repolish, theme_colors,
+    apply_click_cursor, apply_theme as set_app_theme, repolish, theme_colors,
     THEME_VARIANTS, base_theme_names, theme_key_to_base_and_mode, resolve_theme_variant,
 )
 from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path
@@ -103,6 +103,9 @@ def make_row_action_button(on_click, theme_name: str = "classic_dark") -> QPushB
     btn.setObjectName("IconGhost")
     btn.setFixedSize(ROW_ICON_SIZE, ROW_ICON_SIZE)
     btn.setIconSize(QSize(15, 15))
+    # Queue rows are built long after MainWindow's own apply_click_cursor()
+    # pass has run, so this one sets its own hover cursor.
+    btn.setCursor(Qt.PointingHandCursor)
     set_action_icon(btn, "x", theme_name)
     btn.clicked.connect(on_click)
     return btn
@@ -554,7 +557,6 @@ class ConversionItemWidget(QFrame):
             self.meta_label.setText(f"{category_label}   ·   .{item.source_ext} → .{item.target_ext}")
         else:
             self.meta_label.setText(f".{item.source_ext}")
-
         self.progress_bar.setValue(int(item.progress))
         self.format_combo.setEnabled(item.status == ConversionItem.STATUS_WAITING and item.category is not None)
         # [AUDIT] Section 6 (design) - idea 3: clear any stale error tooltip
@@ -664,6 +666,7 @@ class SettingsDialog(QDialog):
         body_layout.addLayout(btn_row)
 
         outer.addWidget(body)
+        apply_click_cursor(self)
 
     # ------------------------------------------------------------------
     # Title bar - a slimmed-down twin of MainWindow's Header: draggable,
@@ -1065,6 +1068,10 @@ class MainWindow(QMainWindow):
 
         root.addWidget(body, stretch=1)
         self._select_nav(0)
+
+        # Last thing in __init__ on purpose: it walks the finished tree, so
+        # every button built above (header, tabs, Documentos) is already there.
+        apply_click_cursor(self)
 
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
