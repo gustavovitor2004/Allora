@@ -18,7 +18,8 @@ own.
 
 from functools import lru_cache
 
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QApplication, QPushButton
 
 # ---------------------------------------------------------------------------
 # Theme gallery
@@ -727,3 +728,29 @@ def repolish(widget) -> None:
     widget and won't notice the property change on its own."""
     widget.style().unpolish(widget)
     widget.style().polish(widget)
+
+
+def apply_click_cursor(root) -> None:
+    """Give every button inside `root` the pointing-hand cursor, so that
+    hovering one signals it can be clicked.
+
+    This is the one piece of button appearance that can't live in
+    build_stylesheet() with the rest: Qt Style Sheets have no `cursor`
+    property (one of the CSS properties Qt never implemented), so it has
+    to be set in code. Call it once on a FINISHED widget tree - findChildren()
+    only sees children that already exist, so a row widget built later
+    (QueueItemWidget and friends) has to set the cursor on its own buttons.
+
+    Deliberately limited to QPushButton. Checkboxes, radio buttons and combo
+    boxes keep the plain arrow, which is what Windows itself does with them;
+    so do the buttons inside Qt's own QMessageBox/QFileDialog, which this
+    never reaches.
+
+    Disabled buttons need no handling here: when Qt picks the cursor it walks
+    up from the widget under the mouse to the nearest ENABLED ancestor, so a
+    disabled button shows the plain arrow by itself - including when it gets
+    disabled while already being hovered (verified on Windows by reading back
+    what the OS actually draws, via GetCursorInfo).
+    """
+    for button in root.findChildren(QPushButton):
+        button.setCursor(Qt.PointingHandCursor)
