@@ -6,7 +6,7 @@ fotos de papel + converter/mesclar PDF/DOCX/TXT/imagem).
 
 Interface **100% em português**. Comentários e docstrings do código **em inglês**.
 
-Repositório: `gustavovitor2004/Allora` · Versão atual: **1.4.0**
+Repositório: `gustavovitor2004/Allora` · Versão atual: **1.4.1**
 
 ---
 
@@ -130,6 +130,20 @@ de `repolish(widget)`.
 Estilo inline com cor quebra nos temas claros. O último caso pendente
 (`result_label` em `tab_documentos.py`) foi resolvido — agora usa
 `QLabel#ResultPreview` em `theme.py`. Não reintroduza esse padrão.
+
+**Exceção: cursor.** QSS do Qt **não tem** a propriedade `cursor` — escrever
+`cursor: pointer;` na folha de estilo não dá erro, simplesmente não faz nada.
+O cursor de mão nos botões vem de `theme.apply_click_cursor(root)`, chamado no
+fim do `__init__` de `MainWindow` e `SettingsDialog` (a função varre a árvore
+com `findChildren`, então só enxerga o que já existe). Widgets de linha criados
+depois — `make_row_action_button()` em `ui.py` e o `delete_btn` de
+`DocConversionItemWidget` — setam o próprio cursor. Se você criar um novo tipo
+de linha com botão, faça o mesmo.
+
+Só `QPushButton` recebe a mão: checkbox, radio e combo ficam com a seta, igual
+ao padrão do Windows. Botão desabilitado não precisa de tratamento — o Qt sobe
+até o ancestral habilitado mais próximo na hora de escolher o cursor, então ele
+mostra a seta sozinho (verificado no Windows lendo o `GetCursorInfo`).
 
 ### 3. Ícones são pixmaps assados — QSS não recolore
 
