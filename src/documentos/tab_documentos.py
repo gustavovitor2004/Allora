@@ -754,6 +754,9 @@ class DocConversionItemWidget(QFrame):
         self.delete_btn.setIconSize(QSize(13, 13))
         self.delete_btn.setToolTip("Remover da lista")
         self.delete_btn.setAccessibleName("Remover da lista")
+        # Same reason as ui.make_row_action_button(): these rows appear after
+        # MainWindow's apply_click_cursor() pass, so they set their own.
+        self.delete_btn.setCursor(Qt.PointingHandCursor)
         if on_delete:
             self.delete_btn.clicked.connect(on_delete)
         layout.addWidget(self.delete_btn)
