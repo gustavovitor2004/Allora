@@ -228,8 +228,28 @@ arquitetura ou exige decisão de produto.
 **Dívida estrutural**
 
 - Três vocabulários de status diferentes para o mesmo conceito (strings PT em
-  `DownloadItem`/`ConversionItem`, chaves EN em `DocConversionItemWidget._CARD_STATUS`).
-  Unificar mexe em fluxo de UI dos três lugares ao mesmo tempo.
+  `DownloadItem`/`ConversionItem`, chaves EN em `DocConversionItemWidget._CARD_STATUS`,
+  e os buckets de cor do `theme.py`). Unificar mexe em fluxo de UI dos três lugares ao
+  mesmo tempo.
+
+  **Decisão de 05/11/2026: adiar deliberadamente.** Não é esquecimento — Claude e
+  ChatGPT avaliaram em separado e chegaram à mesma conclusão (ver `CONVERSA.md`,
+  entradas de 04 e 05/11). O motivo: unificar muda transições de estado, ações
+  disponíveis por linha e aparência nas três áreas de uma vez, num app **sem nenhum
+  teste automatizado** — o risco de regressão não se paga, porque a duplicação não
+  causa bug hoje, só atrito de manutenção.
+
+  **Se algum dia houver motivo concreto para mexer**, o caminho acordado é:
+
+  1. Separar em três camadas: estado interno (chave estável), rótulo em português
+     (exibição) e categoria visual do tema (cor). Hoje os três estão colados.
+  2. Começar pelas duas filas que já compartilham o `QueueManager` — são as que têm
+     base comum e o menor salto.
+  3. Deixar a aba Documentos com o fluxo próprio; ela não passa pelo `QueueManager` e
+     arrastá-la para a mesma mudança triplica a superfície de risco.
+
+  Antes de começar, combine o vocabulário no `CONVERSA.md` — mexer primeiro e alinhar
+  depois garante retrabalho.
 
 ---
 
