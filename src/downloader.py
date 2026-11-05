@@ -11,9 +11,11 @@ Design notes
   threads. PySide6 automatically marshals signal emissions from a non-GUI
   thread to the receiving (GUI) thread's event loop (queued connection),
   so the UI never needs to poll and is never blocked.
-- Metadata (title/thumbnail) is fetched in its own short-lived thread as
-  soon as a URL is queued, independent from the actual download, so the
-  queue list can show a title/thumbnail before the download starts.
+- Metadata (title/thumbnail) is fetched as soon as a URL is queued,
+  independent from the actual download, so the queue list can show a
+  title/thumbnail before the download starts. It runs in a BOUNDED pool
+  (METADATA_WORKERS), not one thread per URL - see that constant for the
+  measurements behind the number.
 - A single lightweight dispatcher thread decides when to start the next
   queued item, respecting the "max simultaneous downloads" setting and the
   paused/running flags.
@@ -36,6 +38,7 @@ Design notes
 """
 
 import itertools
+from concurrent.futures import ThreadPoolExecutor
 import json
 import os
 import subprocess
@@ -45,6 +48,7 @@ import time
 from queue_manager import QueueManager
 from settings import Settings
 from utils import (
+    terminate_process_tree,
     detect_platform, ffmpeg_is_working, find_ffmpeg, find_yt_dlp,
     format_bytes_per_sec, format_eta, height_to_label, no_window_flags,
 )
@@ -182,6 +186,16 @@ def _last_error_line(stderr: str) -> str:
     return lines[-1] if lines else ""
 
 
+# Metadata prefetch runs in a bounded pool instead of one thread per URL.
+# The number is measured, not guessed: a real `--dump-single-json` peaks at
+# ~83 MB across the two processes yt-dlp's onefile build spawns, and takes
+# ~3.1s. Pasting 50 links used to start 50 of them at once - about 4.1 GB of
+# peak memory. At 4 the ceiling is ~330 MB, and the last title lands ~39s
+# after the paste. That wait costs nothing: the title is cosmetic and fills
+# in top-down, and the user can start downloading before the prefetch ends.
+METADATA_WORKERS = 4
+
+
 class CancelledError(Exception):
     """Raised internally when the user cancels an in-progress download."""
 
@@ -230,6 +244,17 @@ class DownloadManager(QueueManager):
 
     def __init__(self, settings: Settings):
         super().__init__(settings)
+        # Bounded prefetch pool (see METADATA_WORKERS). initializer runs once
+        # per worker thread, so the priority drop that _download_worker does
+        # by hand is covered here for every metadata query.
+        self._meta_pool = ThreadPoolExecutor(
+            max_workers=METADATA_WORKERS,
+            initializer=_lower_thread_priority,
+            thread_name_prefix="allora-meta",
+        )
+        # item id -> pending Future, so removing an item can cancel a query
+        # that has not started yet instead of paying for it. Guarded by _lock.
+        self._meta_futures: dict = {}
 
     # ------------------------------------------------------------------
     # QueueManager hooks
@@ -252,11 +277,11 @@ class DownloadManager(QueueManager):
         # it: cancel_event alone only stops OUR loop, and the download would
         # otherwise keep running (and keep writing) after the window is gone.
         # Same override ConversionManager already needed for ffmpeg.
-        if item.process is not None:
-            try:
-                item.process.terminate()
-            except Exception:
-                pass
+        # [FIX] Tree, not just the process we hold. yt-dlp.exe is a
+        # PyInstaller onefile - terminate() killed the launcher and left the
+        # child still downloading after the window was gone. See
+        # utils.terminate_process_tree().
+        terminate_process_tree(item.process)
 
     # ------------------------------------------------------------------
     # Queue management
@@ -268,7 +293,9 @@ class DownloadManager(QueueManager):
             self.items[item.id] = item
             self.order.append(item.id)
         self.item_added.emit(item.id)
-        threading.Thread(target=self._fetch_metadata, args=(item,), daemon=True).start()
+        future = self._meta_pool.submit(self._fetch_metadata, item)
+        with self._lock:
+            self._meta_futures[item.id] = future
         return item
 
     def cancel_item(self, item_id: int):
@@ -281,14 +308,40 @@ class DownloadManager(QueueManager):
             # Terminating outright makes the cancel immediate. The event alone
             # is only noticed on the next line of yt-dlp output, which during a
             # slow merge or a stalled connection can be a long wait.
-            if item.process is not None:
-                try:
-                    item.process.terminate()
-                except Exception:
-                    pass
+            # [FIX] ...and it has to be the whole tree: killing just the
+            # launcher left the real yt-dlp downloading in the background
+            # while the row already read "Cancelado".
+            terminate_process_tree(item.process)
         else:
             item.status = DownloadItem.STATUS_CANCELLED
             self.item_updated.emit(item.id)
+
+    def remove_item(self, item_id: int) -> None:
+        """Drop the item, and stop any metadata work still attached to it.
+
+        A query that has not started yet is cancelled outright (the common
+        case when the user pastes a batch and then clears it, which used to
+        leave every one of those queries to run anyway). One already in
+        flight gets its subprocess terminated - without this it would keep
+        running for up to the 120s timeout, holding ~83 MB, for an item that
+        no longer exists."""
+        with self._lock:
+            future = self._meta_futures.pop(item_id, None)
+            item = self.items.get(item_id)
+        if future is not None:
+            future.cancel()
+        if item is not None:
+            item.cancel_event.set()
+            terminate_process_tree(item.process)
+        super().remove_item(item_id)
+
+    def shutdown(self):
+        """[FIX] The base shutdown already cancels every item and kills its
+        subprocess (see _on_shutdown_item). The prefetch pool needs its own
+        stop on top of that, or closing the app leaves queued queries to be
+        picked up by threads that outlive the window."""
+        super().shutdown()
+        self._meta_pool.shutdown(wait=False, cancel_futures=True)
 
     def retry_item(self, item_id: int):
         item = self.items.get(item_id)
@@ -307,7 +360,8 @@ class DownloadManager(QueueManager):
     # ------------------------------------------------------------------
 
     def _fetch_metadata(self, item: DownloadItem):
-        _lower_thread_priority()
+        # No _lower_thread_priority() here: this always runs on a thread from
+        # _meta_pool, whose initializer already did it (see __init__).
         item.status = DownloadItem.STATUS_FETCHING
         self.item_updated.emit(item.id)
         try:
@@ -315,19 +369,37 @@ class DownloadManager(QueueManager):
             if not ytdlp_path:
                 raise RuntimeError(YTDLP_MISSING_MESSAGE)
 
+            # [FIX] Popen + item.process instead of a blocking subprocess.run.
+            # cancel_item() has always handled STATUS_FETCHING by terminating
+            # item.process - but nothing ever PUT the metadata process there,
+            # so "Cancelar" during a lookup did nothing until the query ended
+            # on its own (up to the 120s timeout below) and was only noticed
+            # in this method's finally. Publishing the handle is what makes
+            # that existing cancel path actually reach this subprocess.
+            #
             # --dump-single-json is the CLI equivalent of the library's
             # extract_info(download=False): same info dict, serialized.
-            proc = subprocess.run(
+            proc = subprocess.Popen(
                 [ytdlp_path, "--encoding", "utf-8", "--no-warnings", "--no-playlist",
                  "--skip-download", "--dump-single-json", "--socket-timeout", "15", item.url],
-                capture_output=True, text=True, encoding="utf-8", errors="replace",
-                timeout=120, creationflags=no_window_flags(),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace",
+                creationflags=no_window_flags(),
             )
-            if proc.returncode != 0 or not (proc.stdout or "").strip():
+            item.process = proc
+            try:
+                out, err = proc.communicate(timeout=120)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate()
+                raise RuntimeError("Tempo esgotado ao obter informacoes do video")
+            # Deliberately local names: on a Popen, `proc.stdout`/`proc.stderr`
+            # are the pipe objects, not the text they carried.
+            if proc.returncode != 0 or not (out or "").strip():
                 raise RuntimeError(
-                    _last_error_line(proc.stderr) or "Nao foi possivel obter informacoes do video"
+                    _last_error_line(err) or "Nao foi possivel obter informacoes do video"
                 )
-            info = json.loads(proc.stdout)
+            info = json.loads(out)
 
             item.title = info.get("title") or item.url
             thumb_url = info.get("thumbnail")
@@ -357,12 +429,22 @@ class DownloadManager(QueueManager):
                 item.status = DownloadItem.STATUS_WAITING
             item.error_message = message
         finally:
+            # Clear the handle first: cancel_item()/shutdown() terminate
+            # whatever is in item.process, and this one is already gone.
+            item.process = None
+            with self._lock:
+                self._meta_futures.pop(item.id, None)
+                # [FIX] The item may have been removed while the query ran.
+                # Identity, not just presence: a removed id is never reused
+                # today, but comparing the object is what actually answers
+                # "is this result still about the row the GUI has".
+                still_listed = self.items.get(item.id) is item
             # The user may have clicked "Cancelar" while the metadata fetch
-            # (which has no cancellation checks of its own) was still in
-            # flight - honor that now instead of silently resuming the item.
+            # was in flight - honor that instead of silently resuming the item.
             if item.cancel_event.is_set():
                 item.status = DownloadItem.STATUS_CANCELLED
-            self.item_updated.emit(item.id)
+            if still_listed:
+                self.item_updated.emit(item.id)
 
     # ------------------------------------------------------------------
     # Actual download
@@ -518,7 +600,12 @@ class DownloadManager(QueueManager):
                     # A real process kill. The library path could only raise
                     # KeyboardInterrupt from inside a progress hook, so it had
                     # to wait for the next callback before anything happened.
-                    process.terminate()
+                    # [FIX] Tree, not just this handle - see
+                    # utils.terminate_process_tree(). Killing the onefile
+                    # launcher alone left the real downloader running, so the
+                    # loop below would sit in process.wait() while the file
+                    # kept growing.
+                    terminate_process_tree(process)
                     cancelled = True
                     break
 
