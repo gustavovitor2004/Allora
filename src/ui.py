@@ -30,7 +30,7 @@ icon-bearing widget gets rebuilt when the user switches theme.
 
 import os
 
-from PySide6.QtCore import Qt, QSize, QPoint, QTimer
+from PySide6.QtCore import Qt, QSize, QPoint, QTimer, QThread, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -50,7 +50,10 @@ from theme import (
     apply_click_cursor, apply_theme as set_app_theme, repolish, theme_colors,
     THEME_VARIANTS, base_theme_names, theme_key_to_base_and_mode, resolve_theme_variant,
 )
-from utils import split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path
+from utils import (
+    split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path,
+    find_yt_dlp, yt_dlp_version, yt_dlp_self_update,
+)
 from version import APP_VERSION
 
 THUMB_SIZE = QSize(104, 60)
@@ -618,6 +621,35 @@ class ConversionItemWidget(QFrame):
             self.manager.cancel_item(self.item_id)
 
 
+class YtDlpUpdateWorker(QThread):
+    """Runs `yt-dlp.exe -U` off the GUI thread.
+
+    One-shot QThread rather than the QueueManager pattern, matching how the
+    Documentos tab handles its own one-shot jobs (see documentos/workers.py):
+    there is a single start -> finish, not a queue.
+
+    The caller must keep this alive until it finishes - a QThread destroyed
+    while still running aborts the process (AGENTS.md, "Armadilhas ja
+    resolvidas"). SettingsDialog does that by refusing to close while an
+    update is in flight, which is also what the user wants: `-U` replaces the
+    executable on disk, and walking away mid-swap is how you get a half
+    written binary."""
+
+    finished_ok = Signal(str)
+    failed = Signal(str)
+
+    def __init__(self, ytdlp_path: str, parent=None):
+        super().__init__(parent)
+        self._ytdlp_path = ytdlp_path
+
+    def run(self):
+        ok, message = yt_dlp_self_update(self._ytdlp_path)
+        if ok:
+            self.finished_ok.emit(message)
+        else:
+            self.failed.emit(message)
+
+
 class SettingsDialog(QDialog):
     """Frameless to match MainWindow (see Header) - its own title bar reuses
     the Header widget/objectNames so it repaints for free whenever the
@@ -631,6 +663,9 @@ class SettingsDialog(QDialog):
         self.settings = settings
         self._original_theme = settings.theme
         self._resolved_theme = settings.theme
+        # True while `yt-dlp -U` runs; blocks closing the dialog (see reject()).
+        self._updating_ytdlp = False
+        self._ytdlp_worker = None
 
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setWindowTitle("Configurações")
@@ -656,14 +691,14 @@ class SettingsDialog(QDialog):
         version_label.setObjectName("Dim")
         btn_row.addWidget(version_label)
         btn_row.addStretch(1)
-        cancel_btn = QPushButton("Cancelar")
-        cancel_btn.setObjectName("Ghost")
-        cancel_btn.clicked.connect(self.reject)
-        save_btn = QPushButton("Salvar")
-        save_btn.setObjectName("Primary")
-        save_btn.clicked.connect(self.accept)
-        btn_row.addWidget(cancel_btn)
-        btn_row.addWidget(save_btn)
+        self._cancel_btn = QPushButton("Cancelar")
+        self._cancel_btn.setObjectName("Ghost")
+        self._cancel_btn.clicked.connect(self.reject)
+        self._save_btn = QPushButton("Salvar")
+        self._save_btn.setObjectName("Primary")
+        self._save_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self._cancel_btn)
+        btn_row.addWidget(self._save_btn)
         body_layout.addLayout(btn_row)
 
         outer.addWidget(body)
@@ -772,11 +807,45 @@ class SettingsDialog(QDialog):
         grid.addWidget(self._ffmpeg_browse_btn, row, 2)
         row += 1
 
+        # settings.ytdlp_path existed since 1.4.0 and is honored by both of
+        # downloader.py's yt-dlp calls, but had no field here - so the only
+        # way to set it was editing config.json by hand. Mirrors the ffmpeg
+        # row above, which is what it was written to be symmetric with.
+        grid.addWidget(QLabel("Caminho customizado do yt-dlp:"), row, 0)
+        self.ytdlp_path_edit = QLineEdit(settings.ytdlp_path)
+        self.ytdlp_path_edit.setPlaceholderText("Deixe em branco para usar tools\\yt-dlp ou o PATH")
+        self.ytdlp_path_edit.setMinimumHeight(34)
+        grid.addWidget(self.ytdlp_path_edit, row, 1)
+        self._ytdlp_browse_btn = QPushButton()
+        self._ytdlp_browse_btn.setObjectName("Secondary")
+        self._ytdlp_browse_btn.setFixedWidth(40)
+        self._ytdlp_browse_btn.setMinimumHeight(34)
+        self._ytdlp_browse_btn.setToolTip("Escolher executavel do yt-dlp")
+        self._ytdlp_browse_btn.setAccessibleName("Escolher executavel do yt-dlp")
+        self._ytdlp_browse_btn.clicked.connect(self._choose_ytdlp)
+        grid.addWidget(self._ytdlp_browse_btn, row, 2)
+        row += 1
+
         outer.addLayout(grid)
 
         self.ffmpeg_status_label = QLabel()
         outer.addWidget(self.ffmpeg_status_label)
         self._refresh_ffmpeg_status()
+
+        # yt-dlp is shipped as an external binary precisely so it can be
+        # updated when a site changes its extractor. Until now that meant
+        # opening a terminal and running `yt-dlp.exe -U` by hand, which is
+        # exactly the friction the external binary was supposed to remove.
+        ytdlp_row = QHBoxLayout()
+        self.ytdlp_status_label = QLabel()
+        ytdlp_row.addWidget(self.ytdlp_status_label, stretch=1)
+        self.ytdlp_update_btn = QPushButton("Atualizar yt-dlp")
+        self.ytdlp_update_btn.setObjectName("Secondary")
+        self.ytdlp_update_btn.setMinimumHeight(30)
+        self.ytdlp_update_btn.clicked.connect(self._update_ytdlp)
+        ytdlp_row.addWidget(self.ytdlp_update_btn)
+        outer.addLayout(ytdlp_row)
+        self._refresh_ytdlp_status()
 
         # [AUDIT] Section 6 (design) - idea 5: ffmpeg gets validated (above),
         # but a stale output folder (a path from a previously-saved config
@@ -876,6 +945,7 @@ class SettingsDialog(QDialog):
         colors = theme_colors(self._resolved_theme)
         self._browse_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
         self._ffmpeg_browse_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
+        self._ytdlp_browse_btn.setIcon(make_icon("folder", colors["text_primary"], size=15))
         self._close_btn.setIcon(make_icon("win-close", colors["text_secondary"], size=12))
 
     # ------------------------------------------------------------------
@@ -892,6 +962,97 @@ class SettingsDialog(QDialog):
             self.ffmpeg_status_label.setObjectName("StatusError")
         repolish(self.ffmpeg_status_label)
 
+    def _refresh_ytdlp_status(self):
+        """Shows which yt-dlp is in use and how old it is, and decides whether
+        updating is allowed right now."""
+        path = find_yt_dlp(self.ytdlp_path_edit.text().strip())
+        version = yt_dlp_version(path) if path else ""
+        if version:
+            self.ytdlp_status_label.setText(f"yt-dlp {version} em {path}")
+            self.ytdlp_status_label.setObjectName("StatusDone")
+        elif path:
+            self.ytdlp_status_label.setText(f"yt-dlp encontrado em {path}, mas nao respondeu.")
+            self.ytdlp_status_label.setObjectName("StatusError")
+        else:
+            self.ytdlp_status_label.setText(
+                "yt-dlp nao encontrado. Coloque o yt-dlp.exe em tools\\yt-dlp\\ "
+                "ao lado do Allora, informe o caminho acima, ou instale-o no PATH."
+            )
+            self.ytdlp_status_label.setObjectName("StatusError")
+        repolish(self.ytdlp_status_label)
+
+        # `-U` REPLACES the executable on disk. Doing that while a download is
+        # running from the same binary is asking for a file-in-use failure, so
+        # the button waits for the queue to be idle.
+        busy = False
+        manager = getattr(self._main_window, "manager", None)
+        if manager is not None:
+            try:
+                busy = manager.active_count() > 0
+            except Exception:
+                busy = False
+        self.ytdlp_update_btn.setEnabled(bool(path) and not busy and not self._updating_ytdlp)
+        if busy:
+            self.ytdlp_update_btn.setToolTip(
+                "Termine ou cancele os downloads em andamento antes de atualizar."
+            )
+        elif not path:
+            self.ytdlp_update_btn.setToolTip("Nenhum yt-dlp para atualizar.")
+        else:
+            self.ytdlp_update_btn.setToolTip("Baixa e instala a versao mais recente do yt-dlp.")
+
+    def _choose_ytdlp(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Selecionar executavel do yt-dlp")
+        if path:
+            self.ytdlp_path_edit.setText(path)
+            self._refresh_ytdlp_status()
+
+    def _update_ytdlp(self):
+        path = find_yt_dlp(self.ytdlp_path_edit.text().strip())
+        if not path or self._updating_ytdlp:
+            return
+        self._updating_ytdlp = True
+        self.ytdlp_update_btn.setEnabled(False)
+        self.ytdlp_status_label.setText("Atualizando o yt-dlp... isso pode levar alguns minutos.")
+        self.ytdlp_status_label.setObjectName("")
+        repolish(self.ytdlp_status_label)
+        self._set_dialog_busy(True)
+
+        self._ytdlp_worker = YtDlpUpdateWorker(path, self)
+        self._ytdlp_worker.finished_ok.connect(self._on_ytdlp_updated)
+        self._ytdlp_worker.failed.connect(self._on_ytdlp_update_failed)
+        self._ytdlp_worker.start()
+
+    def _set_dialog_busy(self, busy: bool):
+        """Keeps the dialog open while the update runs - see YtDlpUpdateWorker's
+        docstring for why letting it close mid-update is not an option."""
+        self._close_btn.setEnabled(not busy)
+        self._save_btn.setEnabled(not busy)
+        self._cancel_btn.setEnabled(not busy)
+
+    def _finish_ytdlp_update(self):
+        self._updating_ytdlp = False
+        self._set_dialog_busy(False)
+        self._ytdlp_worker = None
+
+    def _on_ytdlp_updated(self, message: str):
+        self._finish_ytdlp_update()
+        # Re-read the version from the binary instead of trusting the message:
+        # what matters is what is on disk now.
+        self._refresh_ytdlp_status()
+        QMessageBox.information(self, "yt-dlp atualizado", message)
+
+    def _on_ytdlp_update_failed(self, message: str):
+        self._finish_ytdlp_update()
+        self._refresh_ytdlp_status()
+        QMessageBox.warning(
+            self, "Nao foi possivel atualizar",
+            "A atualizacao do yt-dlp falhou:\n\n"
+            f"{message}\n\n"
+            "Voce ainda pode atualizar manualmente rodando `yt-dlp.exe -U` "
+            "na pasta tools\\yt-dlp.",
+        )
+
     def _choose_folder(self):
         folder = QFileDialog.getExistingDirectory(self, "Escolher pasta de destino", self.folder_edit.text())
         if folder:
@@ -904,6 +1065,10 @@ class SettingsDialog(QDialog):
             self._refresh_ffmpeg_status()
 
     def reject(self):
+        # Esc also lands here, so the busy check has to be in reject() itself
+        # and not only on the disabled buttons.
+        if self._updating_ytdlp:
+            return
         # Cancelar, the titlebar close button, and Esc all funnel through
         # here - undo the live preview so an aborted theme change never
         # sticks after the dialog closes without Salvar.
@@ -945,6 +1110,7 @@ class SettingsDialog(QDialog):
         settings.save_thumbnail = self.thumb_check.isChecked()
         settings.save_metadata = self.meta_check.isChecked()
         settings.ffmpeg_path = self.ffmpeg_path_edit.text().strip()
+        settings.ytdlp_path = self.ytdlp_path_edit.text().strip()
 
 
 class UrlInput(QPlainTextEdit):
