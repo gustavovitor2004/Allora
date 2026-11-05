@@ -6,7 +6,7 @@ fotos de papel + converter/mesclar PDF/DOCX/TXT/imagem).
 
 Interface **100% em português**. Comentários e docstrings do código **em inglês**.
 
-Repositório: `gustavovitor2004/Allora` · Versão atual: **1.4.1**
+Repositório: `gustavovitor2004/Allora` · Versão atual: **1.5.0**
 
 ---
 
@@ -83,9 +83,14 @@ nos dois e precisou ser corrigido duas vezes.
   objetos Python agora sai pelo stdout: `--dump-single-json` para metadados,
   `--progress-template` para progresso, `--print after_move:` para caminho final e
   altura. Ver `_run_ytdlp`/`_fetch_metadata` em `downloader.py`.
-- Cancelamento: mata o processo (`terminate()`). É mais direto que o caminho antigo, que
-  só conseguia levantar `KeyboardInterrupt` de dentro do progress hook e portanto tinha
-  que esperar o próximo callback.
+- O prefetch de metadados roda num **pool limitado** (`METADATA_WORKERS = 4` em
+  `downloader.py`), não mais uma thread por URL. O número é medido, não chutado: cada
+  `--dump-single-json` tem pico de ~83 MB e leva ~3,1s, então colar 50 links disparava
+  ~4,1 GB de pico simultâneo. Com 4, o teto é ~330 MB.
+- Cancelamento: mata a **árvore** do processo (`utils.terminate_process_tree`), não só
+  o processo que iniciamos — ver a armadilha sobre o onefile mais abaixo. É mais direto
+  que o caminho antigo, que só conseguia levantar `KeyboardInterrupt` de dentro do
+  progress hook e portanto tinha que esperar o próximo callback.
 - "Pausar" só impede o despachante de iniciar **novos** itens; o que já está baixando
   termina naturalmente (o yt-dlp não expõe pausa real). Retomar é `resume()` — nunca
   escreva `manager.paused` direto da UI.
@@ -204,13 +209,6 @@ A lista levantada na auditoria de 01/09/2026 foi **toda resolvida** em duas leva
 segue abaixo é o que continua em aberto **hoje**, deixado de fora porque muda
 arquitetura ou exige decisão de produto.
 
-**Médio**
-
-- `DownloadManager._fetch_metadata()` cria uma thread por URL, fora do `active_threads`
-  e sem respeitar `max_simultaneous`. Colar 50 links dispara 50 `extract_info`
-  simultâneos. Precisa de um pool limitado — é mudança de arquitetura, não conserto
-  pontual.
-
 **Baixo**
 
 - `convert_file(..., progress_cb=None)` é um ponto de extensão morto: nenhum chamador
@@ -284,6 +282,14 @@ arquitetura ou exige decisão de produto.
 - **Cancelar tem que sempre chegar a um status terminal**: se um caminho de cancelamento
   sai do worker sem gravar `STATUS_CANCELLED`/`STATUS_ERROR`, a linha fica presa em
   "Baixando..." para sempre e o botão de cancelar não faz mais nada.
+- **`terminate()` não mata o yt-dlp — mata só o lançador**: o `yt-dlp.exe` distribuído
+  é PyInstaller *onefile*. O processo que a gente inicia apenas se desempacota e gera um
+  **filho**, e é o filho que trabalha. Matar o pai deixa o filho vivo: comprovado no
+  Windows, com o filho ainda rodando 2,5s depois do `terminate()`. Na prática, cancelar
+  um download encerrava a linha na interface enquanto o download continuava, e fechar o
+  app deixava processos órfãos. Todo encerramento passa por
+  `utils.terminate_process_tree()`, que usa `taskkill /T`. Não volte a chamar
+  `process.terminate()` direto num binário onefile.
 - **`--progress` é obrigatório ao chamar o yt-dlp por subprocesso**: com stdout num pipe
   (que é sempre o nosso caso) ele suprime o relatório de progresso por completo, e o
   `--progress-template` simplesmente nunca emite nada. A barra ficaria parada em 0% sem
