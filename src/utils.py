@@ -260,6 +260,91 @@ def yt_dlp_is_working(yt_dlp_path: str) -> bool:
     return binary_is_working(yt_dlp_path, "--version")
 
 
+def terminate_process_tree(process) -> None:
+    """Kill `process` AND whatever it spawned.
+
+    Popen.terminate() is not enough for yt-dlp. The shipped yt-dlp.exe is a
+    PyInstaller *onefile*: the process we launch only unpacks itself and
+    spawns a CHILD that does the real work. Killing the launcher leaves that
+    child running - verified on Windows, where 2.5s after terminate() the
+    child was still alive. For a download that means the UI row says
+    "Cancelado" while the transfer keeps going and keeps writing the file;
+    at shutdown it means orphan processes outliving the window.
+
+    taskkill /T walks the tree, which is what actually stops the work. Always
+    best-effort: a process that already exited is not an error here.
+    """
+    if process is None:
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+                capture_output=True, timeout=15, creationflags=no_window_flags(),
+            )
+        except Exception:
+            pass
+    # Also goes through Popen so its own state/handles are released - and is
+    # the whole mechanism on any non-Windows platform.
+    try:
+        process.terminate()
+    except Exception:
+        pass
+
+
+def yt_dlp_version(yt_dlp_path: str) -> str:
+    """The version yt-dlp reports (e.g. "2026.10.26"), or "" if the binary is
+    missing or doesn't answer. Surfaced in Configuracoes so the user can see
+    how old their copy is - shipping yt-dlp as an external, updatable binary
+    is pointless if nothing ever tells them it has gone stale."""
+    if not yt_dlp_path:
+        return ""
+    try:
+        proc = subprocess.run(
+            [yt_dlp_path, "--version"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=20,
+            creationflags=no_window_flags(),
+        )
+    except Exception:
+        return ""
+    return (proc.stdout or "").strip() if proc.returncode == 0 else ""
+
+
+def yt_dlp_self_update(yt_dlp_path: str):
+    """Run `yt-dlp.exe -U`, returning (ok, message).
+
+    This is the whole point of keeping yt-dlp outside the bundle: a site
+    changes its extractor, downloads break, and the user fixes it in place
+    instead of waiting for a new Allora release. Until now that required
+    opening a terminal, which is exactly the friction the external binary
+    was meant to remove.
+
+    MUST run off the GUI thread - the update downloads a new binary and can
+    take a while. The caller is also responsible for making sure nothing
+    else is using this executable: `-U` REPLACES the file on disk, and doing
+    that while a download is running from the same path can fail outright.
+    """
+    if not yt_dlp_path:
+        return False, "yt-dlp nao encontrado."
+    try:
+        proc = subprocess.run(
+            [yt_dlp_path, "-U"], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=300,
+            creationflags=no_window_flags(),
+        )
+    except Exception as exc:
+        return False, str(exc)
+    # yt-dlp reports progress on stdout and problems on stderr; for a summary
+    # the last non-empty line of the two is what actually says what happened
+    # ("Updated yt-dlp to ..." / "yt-dlp is up to date ...").
+    streams = [proc.stdout or "", proc.stderr or ""]
+    lines = [ln.strip() for s in streams for ln in s.splitlines() if ln.strip()]
+    summary = lines[-1] if lines else ""
+    if proc.returncode != 0:
+        return False, summary or "A atualizacao falhou."
+    return True, summary or "Atualizacao concluida."
+
+
 # ---------------------------------------------------------------------------
 # Poppler detection (needed by pdf2image, used for PDF -> image conversion)
 # ---------------------------------------------------------------------------
