@@ -55,13 +55,49 @@ Quem for mexer **avisa aqui antes**, dizendo qual número vai usar.
 
 | # | Assunto | Perguntado por | Em |
 |---|---|---|---|
-| 5 | Publicar o `.zip` como asset adicional da v1.4.1 (decisão do Gustavo) | Claude | 2026-11-05 |
-| 8 | Repacotar os arquivos de release com o yt-dlp novo (2026.10.26)? | Claude | 2026-11-05 |
 | 9 | Ninguém propôs testes automatizados — vale encarar? | Claude | 2026-11-05 |
+| 10 | Publicar as releases v1.5.0 / v1.6.0 (upload é manual) | Claude | 2026-11-06 |
+| 11 | A linha de opções da aba Downloads ficou apertada — tirar o rótulo do caminho? | Claude | 2026-11-06 |
 
 ---
 
 ## Histórico
+
+### 2026-11-06 — Claude — 1.6.0: abrir a pasta do download (e o item 5 do ChatGPT)
+
+O Gustavo pediu dois botões para chegar nos arquivos baixados. Feito e publicado em
+**1.6.0** (MINOR). Arquivos tocados: `src/utils.py`, `src/ui.py`, `src/version.py`,
+`AGENTS.md`. **Itens 5 e 8 saíram da tabela**: o `.zip` virou formato padrão da
+release desde a 1.5.0, e o repacote com o yt-dlp 2026.10.26 já foi feito lá.
+
+**O que entrou.** Um botão "Abrir pasta" na barra de opções (a aba Documentos já tinha
+o equivalente desde que nasceu; a de Downloads, não), e um botão por linha, visível só
+no estado Concluído, que abre a pasta **com o arquivo selecionado**. Esse segundo usa
+o `item.output_path` — que o `downloader.py` grava desde a 1.4.0 e que **nenhuma parte
+da interface lia**. O `converter.py` também grava o dele e também não é lido: se você
+quiser o mesmo botão na aba Converter, o dado já está lá.
+
+**Uma armadilha nova, já no `AGENTS.md`.** `os.startfile()` **não faz nada** com um
+caminho que carregue componente curto 8.3 (`...\\GUSTAV~1.GOM\\...`): não abre janela e
+não levanta exceção, então o código conclui que deu certo. Descobri porque o caminho
+de fallback retornava sucesso sem abrir nada. Comparei lado a lado — curto: zero
+janelas; expandido: abre. `utils.open_folder()` passa por `os.path.realpath()` antes.
+
+**Um aviso para quem mexer em layout.** O botão novo roubou largura e o combo de
+qualidade, que **já vinha cortado antes**, piorou. Minha primeira tentativa de conserto
+foi pior que o problema: `setMinimumContentsLength(27)` reserva 27 larguras de
+caractere *médio* e pediu **282px** para um texto que desenha em **167px**, forçando o
+layout a espremer justamente o combo. O certo é medir com `fontMetrics()` e recalcular
+no refresh de tema, porque cada tema traz fonte própria — virou convenção no
+`AGENTS.md`, junto do `ElidedLabel` criado para o rótulo do caminho.
+
+Verificado: 7 temas × 2 larguras de janela (910 e 700, o mínimo), combo não corta em
+nenhum caso; 16 checagens de fiação na interface; 9 do helper contra o Explorer real,
+incluindo seleção de arquivo com espaço e acento no nome.
+
+**Fica em aberto (item 11):** mesmo consertada, a linha de opções está apertada. Com o
+botão e o tooltip, o rótulo do caminho ficou quase redundante ali. Não mexi — é
+decisão de produto, não conserto.
 
 ### 2026-11-05 — Claude — medi a memória, fecho os itens 4 e 7, e começo a 1.5.0
 
