@@ -346,6 +346,61 @@ def yt_dlp_self_update(yt_dlp_path: str):
 
 
 # ---------------------------------------------------------------------------
+# Opening the file manager
+# ---------------------------------------------------------------------------
+
+def open_folder(folder: str) -> bool:
+    """Open `folder` in the system file manager. Returns False (never raises)
+    if there is nothing to open - the caller decides what to tell the user.
+
+    Deliberately not QDesktopServices: this module stays Qt-free so the
+    non-GUI code can keep importing it. os.startfile is the stdlib's own
+    ShellExecute wrapper, which is exactly what Explorer expects.
+    """
+    if not folder or not os.path.isdir(folder):
+        return False
+    try:
+        if os.name == "nt":
+            # realpath() first, and not just normpath(). os.startfile does
+            # NOTHING AT ALL - no window, no exception - when the path still
+            # carries an 8.3 short component like ...\GUSTAV~1.GOM\...;
+            # verified side by side, where the expanded form opened fine.
+            # realpath() is what expands it.
+            os.startfile(os.path.realpath(folder))  # noqa: S606 - shell "open"
+        else:
+            subprocess.Popen(["xdg-open", folder])
+        return True
+    except Exception:
+        return False
+
+
+def reveal_file(path: str) -> bool:
+    r"""Open the folder holding `path` with that file already selected, so the
+    user lands on the file instead of hunting for it in a folder of hundreds.
+
+    Falls back to just opening the containing folder when the file is gone
+    (moved, renamed or deleted after the download) - still more useful than
+    doing nothing. Returns False only when neither is possible.
+
+    The command line is built as a STRING on purpose. Explorer wants
+    `/select,"C:\caminho\arquivo.mp4"` as a single token with its own
+    quoting; passing it through a subprocess argument list makes Python
+    quote it as `"/select,C:\caminho com espaco\x.mp4"`, which Explorer
+    does not understand - it silently opens Documents instead. Its exit code
+    is also meaningless (non-zero even on success), so it is not checked.
+    """
+    if not path:
+        return False
+    if os.name == "nt" and os.path.isfile(path):
+        try:
+            subprocess.Popen('explorer /select,"%s"' % os.path.realpath(path))
+            return True
+        except Exception:
+            pass
+    return open_folder(os.path.dirname(path))
+
+
+# ---------------------------------------------------------------------------
 # Poppler detection (needed by pdf2image, used for PDF -> image conversion)
 # ---------------------------------------------------------------------------
 
