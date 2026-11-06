@@ -6,7 +6,7 @@ fotos de papel + converter/mesclar PDF/DOCX/TXT/imagem).
 
 Interface **100% em português**. Comentários e docstrings do código **em inglês**.
 
-Repositório: `gustavovitor2004/Allora` · Versão atual: **1.5.0**
+Repositório: `gustavovitor2004/Allora` · Versão atual: **1.6.0**
 
 ---
 
@@ -185,6 +185,16 @@ thread da GUI. Isso resolveu um travamento real no início de vídeos longos.
 - **Diálogos na inicialização**: nada de `QMessageBox` dentro de `MainWindow.__init__` —
   ele roda antes de `window.show()`, então o usuário vê um modal sozinho numa área de
   trabalho vazia. Use `QTimer.singleShot(0, ...)`.
+- **Largura fixa em pixel não sobrevive à troca de tema**: cada tema traz a própria
+  fonte (Impact, Consolas, Constantia...), então a mesma string tem largura diferente
+  em cada um. Para dimensionar algo pelo texto, meça com `fontMetrics()` do próprio
+  widget e **recalcule em `_refresh_icon_theme()`** — ver `_fit_quality_combo()`.
+  `setMinimumContentsLength()` também não serve: ele reserva N larguras de caractere
+  *médio*, o que pediu 282px para um texto que desenha em 167.
+- **Rótulo com caminho longo**: use `ElidedLabel` (`ui.py`). Um `QLabel` comum tem
+  `minimumSizeHint` igual à largura total do texto, então um caminho longo entorta a
+  linha inteira. O `ElidedLabel` encolhe mostrando o **fim** do texto, que é a parte
+  informativa, e guarda o original no tooltip.
 - **Lint**: `pyflakes` limpo em todos os módulos. Mantenha assim.
 
 ---
@@ -282,6 +292,12 @@ arquitetura ou exige decisão de produto.
 - **Cancelar tem que sempre chegar a um status terminal**: se um caminho de cancelamento
   sai do worker sem gravar `STATUS_CANCELLED`/`STATUS_ERROR`, a linha fica presa em
   "Baixando..." para sempre e o botão de cancelar não faz mais nada.
+- **`os.startfile()` não abre caminho curto 8.3**: com um componente no formato
+  `GUSTAV~1.GOM` ele **não faz nada** — não abre janela e não levanta exceção, então o
+  código acha que deu certo. Comprovado lado a lado: caminho curto abriu zero janelas,
+  o mesmo caminho expandido abriu normalmente. `utils.open_folder()` passa por
+  `os.path.realpath()` antes, que é o que expande. O `explorer` por linha de comando
+  não tem esse problema.
 - **`terminate()` não mata o yt-dlp — mata só o lançador**: o `yt-dlp.exe` distribuído
   é PyInstaller *onefile*. O processo que a gente inicia apenas se desempacota e gera um
   **filho**, e é o filho que trabalha. Matar o pai deixa o filho vivo: comprovado no
