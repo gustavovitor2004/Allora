@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QLineEdit, QPlainTextEdit, QPushButton, QComboBox, QListWidget,
     QListWidgetItem, QProgressBar, QFileDialog, QDialog, QSpinBox, QCheckBox,
-    QMessageBox, QFrame, QStackedWidget, QTabWidget,
+    QMessageBox, QFrame, QStackedWidget, QTabWidget, QSizePolicy,
 )
 
 from downloader import DownloadItem, DownloadManager
@@ -52,7 +52,7 @@ from theme import (
 )
 from utils import (
     split_urls, platform_icon, find_ffmpeg, ffmpeg_is_working, resource_path,
-    find_yt_dlp, yt_dlp_version, yt_dlp_self_update,
+    find_yt_dlp, yt_dlp_version, yt_dlp_self_update, open_folder, reveal_file,
 )
 from version import APP_VERSION
 
@@ -98,6 +98,54 @@ def set_pill(pill: QLabel, text: str, variant: str) -> None:
         repolish(pill)
 
 
+class ElidedLabel(QLabel):
+    r"""A QLabel that yields space instead of forcing its row wide, and shows
+    the END of its text when it has to shrink.
+
+    A plain QLabel's minimumSizeHint is the full width of its text, so a long
+    output path pushed the rest of the Downloads row (quality combo, buttons)
+    out of shape. Letting it shrink is only worth anything if what survives is
+    the informative half: "...\Videos\Downloads" tells the user where files
+    go, "C:\Users\gusta" tells them nothing. The untruncated path stays one
+    hover away.
+    """
+
+    MIN_WIDTH = 90
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self._full_text = text
+        self.setToolTip(text)
+        # Preferred, NOT Ignored: Ignored means "disregard the sizeHint and
+        # take whatever you can get", which made this label greedy and
+        # squeezed the quality combo instead. Preferred keeps the full text
+        # as the sizeHint (so it stays whole when the window is wide) while
+        # minimumSizeHint() below lets it be the one that gives way when the
+        # row is tight.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+    def minimumSizeHint(self):
+        base = super().minimumSizeHint()
+        return QSize(self.MIN_WIDTH, base.height())
+
+    def setText(self, text: str):
+        self._full_text = text
+        self.setToolTip(text)
+        self._apply_elide()
+
+    def full_text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self):
+        metrics = self.fontMetrics()
+        available = max(self.width() - 2, 10)
+        super().setText(metrics.elidedText(self._full_text, Qt.ElideLeft, available))
+
+
 def make_row_action_button(on_click, theme_name: str = "classic_dark") -> QPushButton:
     """Small icon-only button used for a queue row's context action
     (cancel while active, retry on error, remove when done). The icon
@@ -125,7 +173,8 @@ def set_action_icon(btn: QPushButton, name: str, theme_name: str = "classic_dark
         return
     color = theme_colors(theme_name)["text_secondary"]
     btn.setIcon(make_icon(name, color, size=15))
-    label = {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover", "copy": "Copiar link"}.get(name, "")
+    label = {"x": "Cancelar", "retry": "Tentar novamente", "trash": "Remover",
+             "copy": "Copiar link", "folder": "Abrir pasta do arquivo"}.get(name, "")
     btn.setToolTip(label)
     # [AUDIT] Section 6 (design) - idea 6 (scoped to accessible names, not
     # new keyboard shortcuts - those need product decisions about which
@@ -283,6 +332,14 @@ class QueueItemWidget(QFrame):
 
         top_row.addLayout(text_col, stretch=1)
 
+        # Shown only once the file exists (see refresh()). item.output_path is
+        # written by downloader.py from yt-dlp's `--print after_move:` line and
+        # had no reader until now - this is what finally uses it.
+        self.open_btn = make_row_action_button(self._on_open_folder_clicked, theme_name)
+        set_action_icon(self.open_btn, "folder", theme_name)
+        self.open_btn.setVisible(False)
+        top_row.addWidget(self.open_btn, alignment=Qt.AlignTop)
+
         self.action_btn = make_row_action_button(self._on_action_clicked, theme_name)
         top_row.addWidget(self.action_btn, alignment=Qt.AlignTop)
 
@@ -329,6 +386,7 @@ class QueueItemWidget(QFrame):
         # relevant - only the Erro/Indisponível branch turns these back on.
         self.copy_btn.setVisible(False)
         self.remove_btn.setVisible(False)
+        self.open_btn.setVisible(False)
         # [AUDIT] Section 6 (design) - idea 3: clear any error tooltip from
         # a previous Erro state too - otherwise it would linger (still
         # showing the old error text on hover) after a retry moved this
@@ -359,6 +417,9 @@ class QueueItemWidget(QFrame):
             set_action_icon(self.action_btn, "trash", self.theme_name)
             self.action_btn.setEnabled(True)
             self.progress_bar.setVisible(False)
+            # Only state where there is a finished file to go look at.
+            self.open_btn.setVisible(True)
+            set_action_icon(self.open_btn, "folder", self.theme_name)
         elif status in (DownloadItem.STATUS_ERROR, DownloadItem.STATUS_UNAVAILABLE):
             text = "Vídeo indisponível" if status == DownloadItem.STATUS_UNAVAILABLE else "Erro"
             if item.error_message:
@@ -415,6 +476,27 @@ class QueueItemWidget(QFrame):
             self._remove_self()
         else:
             self.manager.cancel_item(self.item_id)
+
+    def _on_open_folder_clicked(self):
+        """Open the folder this row's file landed in, with the file selected.
+
+        Falls back to the configured output folder when the item never
+        recorded a path (an older item, or one whose yt-dlp run did not print
+        it). reveal_file() already falls back on its own when the path was
+        recorded but the file has since been moved or deleted."""
+        item = self.manager.get_item(self.item_id)
+        if item is None:
+            return
+        if item.output_path and reveal_file(item.output_path):
+            return
+        if open_folder(self.manager.settings.output_dir):
+            return
+        QMessageBox.warning(
+            self, "Pasta indisponível",
+            "Não foi possível abrir a pasta do arquivo.\n\n"
+            f"Caminho registrado: {item.output_path or '(nenhum)'}\n"
+            f"Pasta de destino: {self.manager.settings.output_dir}",
+        )
 
     def _on_copy_link_clicked(self):
         item = self.manager.get_item(self.item_id)
@@ -1262,6 +1344,22 @@ class MainWindow(QMainWindow):
         layout.addStretch(1)
         return sidebar
 
+    def _fit_quality_combo(self):
+        """Keep the quality combo wide enough for its longest entry.
+
+        Measured in pixels from the combo's OWN font, because every theme
+        ships a different one (Impact, Consolas, Constantia...) - the same
+        string is a different width per theme, so this is recomputed whenever
+        the theme changes (see _refresh_icon_theme). The extra accounts for
+        the dropdown arrow and the frame, taken from the style rather than
+        guessed: sizeHint() minus the width of the text it is currently
+        showing."""
+        combo = self.quality_combo
+        metrics = combo.fontMetrics()
+        longest = max(metrics.horizontalAdvance(q) for q in QUALITY_CHOICES)
+        chrome = combo.sizeHint().width() - metrics.horizontalAdvance(combo.currentText())
+        combo.setMinimumWidth(longest + max(chrome, 24))
+
     def _select_nav(self, index: int):
         self.stack.setCurrentIndex(index)
         for i, item in enumerate(self.nav_items):
@@ -1432,11 +1530,21 @@ class MainWindow(QMainWindow):
         self.quality_combo = QComboBox()
         self.quality_combo.addItems(QUALITY_CHOICES)
         self.quality_combo.setCurrentText(self.settings.default_quality)
+        # Width comes from _fit_quality_combo(), called here and again on every
+        # theme change. Not setMinimumContentsLength(): that reserves N
+        # AVERAGE character widths, which for this list asked for 282px when
+        # the longest string actually draws in 167 - the row then had to
+        # squeeze something, and it squeezed this combo.
         options_row.addWidget(self.quality_combo)
+        self._fit_quality_combo()
 
         options_row.addSpacing(20)
         options_row.addWidget(QLabel("Pasta:"))
-        self.folder_label = QLabel(self.settings.output_dir)
+        # This is the element that gives when the row runs out of room: a
+        # shortened path is a cosmetic loss (the full one is in the tooltip and
+        # in Configurações), while a squeezed quality combo would hide which
+        # option is actually selected.
+        self.folder_label = ElidedLabel(self.settings.output_dir)
         self.folder_label.setObjectName("Dim")
         options_row.addWidget(self.folder_label, stretch=1)
         folder_btn = QPushButton(" Escolher")
@@ -1444,6 +1552,18 @@ class MainWindow(QMainWindow):
         folder_btn.clicked.connect(self.choose_output_folder)
         self._icon_buttons.append((folder_btn, "folder", "text_primary"))
         options_row.addWidget(folder_btn)
+
+        # The Documentos tab has had an "Abrir pasta de saída" since it
+        # shipped; the Downloads tab never did, so the only way to reach the
+        # videos was to read the path off the label and navigate there by
+        # hand. Registered in _icon_buttons so its baked icon follows the
+        # theme (AGENTS.md invariant 3).
+        open_folder_btn = QPushButton(" Abrir pasta")
+        open_folder_btn.setObjectName("Secondary")
+        open_folder_btn.setToolTip("Abrir a pasta de destino no Explorer")
+        open_folder_btn.clicked.connect(self.open_output_folder)
+        self._icon_buttons.append((open_folder_btn, "folder", "text_primary"))
+        options_row.addWidget(open_folder_btn)
         body.addLayout(options_row)
 
         # --- queue section ---------------------------------------------------
@@ -1715,6 +1835,20 @@ class MainWindow(QMainWindow):
             self.conv_folder_label.setText(folder)
             save_settings(self.settings)
 
+    def open_output_folder(self):
+        """Open the configured download folder. Reports instead of failing
+        silently - the folder can be on a drive that has been unplugged, or
+        one deleted since it was chosen."""
+        if open_folder(self.settings.output_dir):
+            return
+        QMessageBox.warning(
+            self, "Pasta indisponível",
+            "Não foi possível abrir a pasta de destino:\n\n"
+            f"{self.settings.output_dir}\n\n"
+            "Verifique se ela ainda existe (o drive pode ter sido removido) "
+            "ou escolha outra em Configurações.",
+        )
+
     def on_start_all(self):
         self.manager.start_all()
         self.status_bar_label.setText("Baixando...")
@@ -1814,6 +1948,10 @@ class MainWindow(QMainWindow):
         colors = theme_colors(theme_name)
 
         self.logo_label.setPixmap(self._load_logo_pixmap(34, invert=colors.get("is_light", False)))
+
+        # The font changes with the theme, so the combo's minimum width has
+        # to be measured again - see _fit_quality_combo().
+        self._fit_quality_combo()
 
         for item in self.nav_items:
             item.set_theme(theme_name)
